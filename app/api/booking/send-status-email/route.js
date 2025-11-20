@@ -121,7 +121,31 @@ export async function POST(request) {
     let numberOfNights = 0
     let paymentLink = null
 
-    if (status === "Approved" && roomType && checkIn && checkOut) {
+    // Normalize roomType - handle empty or invalid values
+    if (roomType) {
+      roomType = roomType.trim()
+      // Handle "WALA" or empty values
+      if (roomType === "WALA" || roomType === "" || !roomType) {
+        console.warn("Room type is empty or 'WALA', trying to fetch from booking document...")
+        // Try to get roomType from booking document if bookingId is available
+        if (bookingId) {
+          try {
+            const { doc, getDoc } = await import("firebase/firestore")
+            const bookingRef = doc(db, "guestbooking", bookingId)
+            const bookingDoc = await getDoc(bookingRef)
+            if (bookingDoc.exists()) {
+              const bookingData = bookingDoc.data()
+              roomType = bookingData.roomType?.trim() || roomType
+              console.log("Fetched roomType from booking document:", roomType)
+            }
+          } catch (fetchError) {
+            console.error("Error fetching booking document:", fetchError)
+          }
+        }
+      }
+    }
+
+    if (status === "Approved" && roomType && roomType.trim() && roomType !== "WALA" && checkIn && checkOut) {
       // Calculate number of nights
       numberOfNights = calculateNights(checkIn, checkOut)
       console.log(`Calculating payment: roomType="${roomType}", checkIn="${checkIn}", checkOut="${checkOut}", nights=${numberOfNights}`)
@@ -236,7 +260,7 @@ export async function POST(request) {
               <h2 style="color: #059669; margin-top: 0; font-size: 18px;">Booking Details</h2>
               <ul style="list-style: none; padding: 0; margin: 0; color: #374151;">
                 <li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-                  <strong>Room:</strong> ${roomType || "N/A"}
+                  <strong>Room:</strong> ${roomType && roomType.trim() ? roomType.trim() : "N/A - Please contact us"}
                 </li>
                 <li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
                   <strong>Check-in:</strong> ${formattedCheckIn}

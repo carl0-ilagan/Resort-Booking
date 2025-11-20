@@ -40,7 +40,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en" className={`${sans.variable} ${display.variable}`}>
       <head>
-        <link rel="manifest" href="/manifest.json" />
+        <link rel="manifest" href="/api/manifest" />
         <link rel="icon" href="/icon.svg" />
         <link rel="apple-touch-icon" href="/apple-icon.png" />
         <meta name="theme-color" content="#059669" />

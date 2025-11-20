@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { CheckCircle, X, Undo2, Eye, Loader2, ChevronLeft, ChevronRight } from "lucide-react"
+import { CheckCircle, X, Undo2, Eye, Loader2, ChevronLeft, ChevronRight, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination"
@@ -266,6 +266,86 @@ export default function ManageBookings() {
     }
   }
 
+  const formatDateForExport = (dateString) => {
+    if (!dateString) return "N/A"
+    try {
+      const date = new Date(dateString + "T00:00:00")
+      return date.toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit" })
+    } catch {
+      return dateString
+    }
+  }
+
+  const exportToExcel = () => {
+    try {
+      // Prepare data for export
+      const exportData = sortedAndFilteredBookings.map((booking, index) => {
+        const createdAt = booking.createdAt?.toDate 
+          ? booking.createdAt.toDate() 
+          : booking.createdAt 
+          ? new Date(booking.createdAt) 
+          : new Date()
+        
+        return {
+          "No.": index + 1,
+          "Booking ID": booking.id || "N/A",
+          "Guest Name": booking.name || "N/A",
+          "Email": booking.email || "N/A",
+          "Phone": booking.phone || "N/A",
+          "Room Type": booking.roomType || "N/A",
+          "Check-in": formatDateForExport(booking.checkIn),
+          "Check-out": formatDateForExport(booking.checkOut),
+          "Guests": booking.guests || "N/A",
+          "Status": booking.status?.trim() || "Pending",
+          "Payment Status": booking.paymentStatus || "unpaid",
+          "Paid Amount": booking.paidAmount ? `₱${booking.paidAmount.toFixed(2)}` : "N/A",
+          "Special Requests": booking.specialRequests || "None",
+          "Created At": createdAt.toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }),
+          "Updated At": booking.updatedAt?.toDate 
+            ? booking.updatedAt.toDate().toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+            : "N/A",
+        }
+      })
+
+      // Convert to CSV format (Excel-compatible)
+      const headers = Object.keys(exportData[0] || {})
+      const csvHeaders = headers.join(",")
+      
+      const csvRows = exportData.map((row) => {
+        return headers.map((header) => {
+          const value = row[header] || ""
+          // Escape commas and quotes in CSV
+          if (typeof value === "string" && (value.includes(",") || value.includes('"') || value.includes("\n"))) {
+            return `"${value.replace(/"/g, '""')}"`
+          }
+          return value
+        }).join(",")
+      })
+
+      const csvContent = [csvHeaders, ...csvRows].join("\n")
+      
+      // Add BOM for Excel UTF-8 support
+      const BOM = "\uFEFF"
+      const blob = new Blob([BOM + csvContent], { type: "text/csv;charset=utf-8;" })
+      
+      // Create download link
+      const link = document.createElement("a")
+      const today = new Date().toISOString().split("T")[0]
+      const filename = `bookings-export-${today}.csv`
+      link.href = URL.createObjectURL(blob)
+      link.download = filename
+      link.style.display = "none"
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      
+      toast.success(`Exported ${exportData.length} bookings to ${filename}`)
+    } catch (error) {
+      console.error("Error exporting bookings:", error)
+      toast.error("Failed to export bookings. Please try again.")
+    }
+  }
+
   // Sort and filter bookings
   const sortedAndFilteredBookings = useMemo(() => {
     let filtered = [...bookings]
@@ -341,7 +421,15 @@ export default function ManageBookings() {
     <div>
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
         <h1 className="text-3xl font-bold text-foreground">Manage Bookings</h1>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <Button
+            onClick={exportToExcel}
+            className="bg-emerald-700 hover:bg-emerald-800 text-white"
+            disabled={loading || sortedAndFilteredBookings.length === 0}
+          >
+            <Download size={16} className="mr-2" />
+            Export to Excel
+          </Button>
           <label className="text-sm text-muted-foreground whitespace-nowrap">Sort by:</label>
           <Select value={sortBy} onValueChange={setSortBy}>
             <SelectTrigger className="w-[180px]">
