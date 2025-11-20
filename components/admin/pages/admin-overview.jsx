@@ -14,6 +14,7 @@ export default function AdminOverview() {
   const [bookings, setBookings] = useState([])
   const [feedbacks, setFeedbacks] = useState([])
   const [revenueData, setRevenueData] = useState([])
+  const [chartView, setChartView] = useState("day")
 
   // Auto-complete bookings that are paid and past check-out date
   useEffect(() => {
@@ -278,9 +279,60 @@ export default function AdminOverview() {
           }))
           .sort((a, b) => new Date(a.fullDate) - new Date(b.fullDate))
 
-        // Get last 30 days or all available data
-        const last30Days = revenueArray.slice(-30)
-        setRevenueData(last30Days)
+        // Group by view type
+        let groupedData = []
+        if (chartView === "week") {
+          // Group by week
+          const weekMap = new Map()
+          revenueArray.forEach((item) => {
+            const date = new Date(item.fullDate)
+            const weekStart = new Date(date)
+            weekStart.setDate(date.getDate() - date.getDay()) // Start of week (Sunday)
+            const weekKey = weekStart.toISOString().split("T")[0]
+            
+            const existing = weekMap.get(weekKey) || { actualRevenue: 0, estimatedRevenue: 0, fullDate: weekKey }
+            existing.actualRevenue += item.actualRevenue
+            existing.estimatedRevenue += item.estimatedRevenue
+            weekMap.set(weekKey, existing)
+          })
+          
+          groupedData = Array.from(weekMap.entries())
+            .map(([date, data]) => ({
+              date: new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+              actualRevenue: Math.round(data.actualRevenue * 100) / 100,
+              estimatedRevenue: Math.round(data.estimatedRevenue * 100) / 100,
+              fullDate: date,
+            }))
+            .sort((a, b) => new Date(a.fullDate) - new Date(b.fullDate))
+            .slice(-12) // Last 12 weeks
+        } else if (chartView === "month") {
+          // Group by month
+          const monthMap = new Map()
+          revenueArray.forEach((item) => {
+            const date = new Date(item.fullDate)
+            const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`
+            
+            const existing = monthMap.get(monthKey) || { actualRevenue: 0, estimatedRevenue: 0, fullDate: monthKey }
+            existing.actualRevenue += item.actualRevenue
+            existing.estimatedRevenue += item.estimatedRevenue
+            monthMap.set(monthKey, existing)
+          })
+          
+          groupedData = Array.from(monthMap.entries())
+            .map(([date, data]) => ({
+              date: new Date(date + "-01").toLocaleDateString("en-US", { month: "short", year: "numeric" }),
+              actualRevenue: Math.round(data.actualRevenue * 100) / 100,
+              estimatedRevenue: Math.round(data.estimatedRevenue * 100) / 100,
+              fullDate: date,
+            }))
+            .sort((a, b) => new Date(a.fullDate) - new Date(b.fullDate))
+            .slice(-12) // Last 12 months
+        } else {
+          // Day view - last 30 days
+          groupedData = revenueArray.slice(-30)
+        }
+
+        setRevenueData(groupedData)
       } catch (error) {
         console.error("Error calculating revenue:", error)
         setRevenueData([])
@@ -288,7 +340,7 @@ export default function AdminOverview() {
     }
 
     calculateRevenue()
-  }, [bookings, rooms])
+  }, [bookings, rooms, chartView])
 
   // Calculate stats
   const stats = useMemo(() => {
@@ -494,7 +546,41 @@ export default function AdminOverview() {
 
       {/* Revenue Chart */}
       <div className="bg-card rounded-xl p-6 shadow-lg mb-8">
-        <h2 className="text-xl font-bold text-foreground mb-4">Revenue Trend</h2>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-4">
+          <h2 className="text-xl font-bold text-foreground">Revenue Trend</h2>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setChartView("day")}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                chartView === "day"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+              }`}
+            >
+              Day
+            </button>
+            <button
+              onClick={() => setChartView("week")}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                chartView === "week"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+              }`}
+            >
+              Week
+            </button>
+            <button
+              onClick={() => setChartView("month")}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                chartView === "month"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+              }`}
+            >
+              Month
+            </button>
+          </div>
+        </div>
         {loading ? (
           <Skeleton className="h-64 w-full" />
         ) : revenueData.length === 0 ? (
@@ -502,53 +588,60 @@ export default function AdminOverview() {
             <p>No revenue data available yet</p>
           </div>
         ) : (
-          <ChartContainer config={chartConfig} className="h-64">
-            <LineChart data={revenueData}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-              <XAxis
-                dataKey="date"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                className="text-xs"
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                className="text-xs"
-                tickFormatter={(value) => `₱${(value / 1000).toFixed(0)}k`}
-              />
-              <ChartTooltip content={<ChartTooltipContent />} />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="actualRevenue"
-                stroke="var(--color-actualRevenue)"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4 }}
-                name="Actual Revenue"
-              />
-              <Line
-                type="monotone"
-                dataKey="estimatedRevenue"
-                stroke="var(--color-estimatedRevenue)"
-                strokeWidth={2}
-                strokeDasharray="5 5"
-                dot={false}
-                activeDot={{ r: 4 }}
-                name="Estimated Revenue"
-              />
-            </LineChart>
-          </ChartContainer>
+          <div className="overflow-x-auto">
+            <ChartContainer config={chartConfig} className="h-64 min-w-[600px]">
+              <LineChart data={revenueData}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis
+                  dataKey="date"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  className="text-xs"
+                  angle={-45}
+                  textAnchor="end"
+                  height={60}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  className="text-xs"
+                  tickFormatter={(value) => `₱${(value / 1000).toFixed(0)}k`}
+                />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="actualRevenue"
+                  stroke="var(--color-actualRevenue)"
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                  name="Actual Revenue"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="estimatedRevenue"
+                  stroke="var(--color-estimatedRevenue)"
+                  strokeWidth={2}
+                  strokeDasharray="5 5"
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                  name="Estimated Revenue"
+                />
+              </LineChart>
+            </ChartContainer>
+          </div>
         )}
       </div>
 
       {/* Recent Bookings */}
       <div className="bg-card rounded-xl p-6 shadow-lg">
         <h2 className="text-xl font-bold text-foreground mb-4">Recent Bookings</h2>
-        <div className="overflow-x-auto">
+        
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="border-b border-border">
               <tr>
@@ -630,6 +723,75 @@ export default function AdminOverview() {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile Card View */}
+        <div className="md:hidden space-y-4">
+          {loading ? (
+            Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="bg-secondary/50 rounded-lg p-4 space-y-3">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="h-6 w-20 rounded-full" />
+              </div>
+            ))
+          ) : recentBookings.length === 0 ? (
+            <div className="py-8 text-center text-muted-foreground">
+              No bookings found
+            </div>
+          ) : (
+            recentBookings.map((booking) => (
+              <div key={booking.id} className="bg-secondary/50 rounded-lg p-4 space-y-3 border border-border">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-muted-foreground">ID</span>
+                  <span className="text-sm font-medium text-foreground">{booking.id}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-muted-foreground">Guest</span>
+                  <span className="text-sm font-medium text-foreground">{booking.guest}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-muted-foreground">Room</span>
+                  <span className="text-sm font-medium text-foreground">{booking.room}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-muted-foreground">Check-in</span>
+                  <span className="text-sm font-medium text-foreground">{booking.date}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-muted-foreground">Status</span>
+                  <span
+                    className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                      booking.status === "Approved"
+                        ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+                        : booking.status === "Pending"
+                          ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
+                          : booking.status === "Completed"
+                            ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
+                            : booking.status === "Cancelled"
+                              ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
+                              : "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400"
+                    }`}
+                  >
+                    {booking.status}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-muted-foreground">Payment</span>
+                  <span
+                    className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                      booking.paymentStatus === "paid"
+                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                        : "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400"
+                    }`}
+                  >
+                    {booking.paymentStatus === "paid" ? "Paid" : "Unpaid"}
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>
