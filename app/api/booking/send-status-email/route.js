@@ -39,12 +39,46 @@ function createTransporter() {
 // Helper function to calculate number of nights
 function calculateNights(checkIn, checkOut) {
   try {
-    const checkInDate = new Date(checkIn + "T00:00:00")
-    const checkOutDate = new Date(checkOut + "T00:00:00")
-    const diffTime = Math.abs(checkOutDate - checkInDate)
+    // Handle both string (YYYY-MM-DD) and Date object formats
+    let checkInDate, checkOutDate
+    
+    if (typeof checkIn === 'string') {
+      // If it's already in ISO format or has time, use it directly
+      checkInDate = checkIn.includes('T') ? new Date(checkIn) : new Date(checkIn + "T00:00:00")
+    } else {
+      checkInDate = new Date(checkIn)
+    }
+    
+    if (typeof checkOut === 'string') {
+      checkOutDate = checkOut.includes('T') ? new Date(checkOut) : new Date(checkOut + "T00:00:00")
+    } else {
+      checkOutDate = new Date(checkOut)
+    }
+    
+    // Validate dates
+    if (isNaN(checkInDate.getTime()) || isNaN(checkOutDate.getTime())) {
+      console.error("Invalid date format:", { checkIn, checkOut })
+      return 1
+    }
+    
+    // Reset to midnight for accurate day calculation
+    checkInDate.setHours(0, 0, 0, 0)
+    checkOutDate.setHours(0, 0, 0, 0)
+    
+    // Calculate difference in milliseconds
+    const diffTime = checkOutDate.getTime() - checkInDate.getTime()
+    
+    // Convert to days (positive difference)
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-    return diffDays
-  } catch {
+    
+    // Ensure at least 1 night
+    const nights = diffDays > 0 ? diffDays : 1
+    
+    console.log(`Calculated nights: ${nights} (checkIn: ${checkInDate.toISOString().split('T')[0]}, checkOut: ${checkOutDate.toISOString().split('T')[0]})`)
+    
+    return nights
+  } catch (error) {
+    console.error("Error calculating nights:", error, { checkIn, checkOut })
     return 1
   }
 }
@@ -92,6 +126,30 @@ export async function POST(request) {
     
     console.log("Send status email called:", { email, name, roomType, checkIn, checkOut, status, bookingId })
 
+    // Always fetch booking document if bookingId is available to ensure we have the latest data
+    if (bookingId) {
+      try {
+        const { doc, getDoc } = await import("firebase/firestore")
+        const bookingRef = doc(db, "guestbooking", bookingId)
+        const bookingDoc = await getDoc(bookingRef)
+        if (bookingDoc.exists()) {
+          const bookingData = bookingDoc.data()
+          // Use booking document as source of truth
+          roomType = bookingData.roomType?.trim() || roomType || ""
+          checkIn = bookingData.checkIn || checkIn
+          checkOut = bookingData.checkOut || checkOut
+          email = bookingData.email || email
+          name = bookingData.name || name
+          console.log("✅ Fetched booking data from Firestore:", { roomType, checkIn, checkOut, email, name })
+        } else {
+          console.warn("⚠️ Booking document not found:", bookingId)
+        }
+      } catch (fetchError) {
+        console.error("❌ Error fetching booking document:", fetchError)
+        // Continue with provided data if fetch fails
+      }
+    }
+
     // Check if email credentials are configured
     const emailPassword = process.env.EMAIL_PASSWORD || process.env.EMAIL_PASS
     if (!process.env.EMAIL_USER || !emailPassword) {
@@ -123,33 +181,23 @@ export async function POST(request) {
     let numberOfNights = 0
     let paymentLink = null
 
-    // Normalize roomType - handle empty or invalid values
+    // Normalize roomType - trim and validate
     if (roomType) {
       roomType = roomType.trim()
-      // Handle "WALA" or empty values
-      if (roomType === "WALA" || roomType === "" || !roomType) {
-        console.warn("Room type is empty or 'WALA', trying to fetch from booking document...")
-        // Try to get roomType from booking document if bookingId is available
-        if (bookingId) {
-          try {
-            const { doc, getDoc } = await import("firebase/firestore")
-            const bookingRef = doc(db, "guestbooking", bookingId)
-            const bookingDoc = await getDoc(bookingRef)
-            if (bookingDoc.exists()) {
-              const bookingData = bookingDoc.data()
-              roomType = bookingData.roomType?.trim() || roomType
-              console.log("Fetched roomType from booking document:", roomType)
-            }
-          } catch (fetchError) {
-            console.error("Error fetching booking document:", fetchError)
-          }
-        }
+      // Replace "WALA" with empty string
+      if (roomType === "WALA") {
+        roomType = ""
       }
     }
 
-    if (status === "Approved" && roomType && roomType.trim() && roomType !== "WALA" && checkIn && checkOut) {
-      // Calculate number of nights
+    // Always calculate nights if we have dates (for approved bookings)
+    if (status === "Approved" && checkIn && checkOut) {
       numberOfNights = calculateNights(checkIn, checkOut)
+      console.log(`Calculated nights: ${numberOfNights} (checkIn: ${checkIn}, checkOut: ${checkOut})`)
+    }
+
+    // Calculate price and create payment link if we have valid room type
+    if (status === "Approved" && roomType && roomType !== "" && checkIn && checkOut) {
       console.log(`Calculating payment: roomType="${roomType}", checkIn="${checkIn}", checkOut="${checkOut}", nights=${numberOfNights}`)
       
       // Fetch room price from Firestore
@@ -157,8 +205,12 @@ export async function POST(request) {
       console.log(`Price per night: ${pricePerNight}`)
       
       // Calculate total amount
-      totalAmount = pricePerNight * numberOfNights
-      console.log(`Total amount calculated: ${totalAmount} (${pricePerNight} × ${numberOfNights})`)
+      if (pricePerNight > 0 && numberOfNights > 0) {
+        totalAmount = pricePerNight * numberOfNights
+        console.log(`Total amount calculated: ${totalAmount} (${pricePerNight} × ${numberOfNights})`)
+      } else {
+        console.warn(`Cannot calculate total: pricePerNight=${pricePerNight}, numberOfNights=${numberOfNights}`)
+      }
       
       // Create PayMongo payment link if amount is valid
       if (totalAmount > 0) {
