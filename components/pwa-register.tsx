@@ -11,17 +11,19 @@ export default function PWARegister() {
     }
 
     if (typeof window !== "undefined" && "serviceWorker" in navigator) {
-      // Register service worker
+      // Register service worker with proper scope
       navigator.serviceWorker
-        .register("/sw.js")
+        .register("/sw.js", { scope: "/" })
         .then((registration) => {
-          console.log("[PWA] Service Worker registered:", registration.scope)
+          console.log("[PWA] ✅ Service Worker registered:", registration.scope)
+          console.log("[PWA] Service Worker state:", registration.active?.state || "installing")
 
           // Check for updates
           registration.addEventListener("updatefound", () => {
             const newWorker = registration.installing
             if (newWorker) {
               newWorker.addEventListener("statechange", () => {
+                console.log("[PWA] Service Worker state changed:", newWorker.state)
                 if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
                   console.log("[PWA] New service worker available")
                   // Optionally show update notification
@@ -31,7 +33,11 @@ export default function PWARegister() {
           })
         })
         .catch((error) => {
-          console.error("[PWA] Service Worker registration failed:", error)
+          console.error("[PWA] ❌ Service Worker registration failed:", error)
+          console.error("[PWA] Error details:", {
+            message: error.message,
+            stack: error.stack,
+          })
         })
 
       // Handle service worker messages

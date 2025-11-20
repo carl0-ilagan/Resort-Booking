@@ -59,23 +59,46 @@ export default function PWAInstallButton({ variant = "default", className = "" }
   }, [])
 
   const handleInstallClick = async () => {
-    if (!deferredPrompt) return
-
-    // Show install prompt
-    deferredPrompt.prompt()
-
-    // Wait for user response
-    const { outcome } = await deferredPrompt.userChoice
-
-    if (outcome === "accepted") {
-      console.log("[PWA] User accepted install prompt")
-      setIsInstalled(true)
-      setShowBanner(false)
-    } else {
-      console.log("[PWA] User dismissed install prompt")
+    if (!deferredPrompt) {
+      console.log("[PWA Install] No deferred prompt available. Checking installability...")
+      
+      // Try to show manual install instructions
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+      const isAndroid = /Android/.test(navigator.userAgent)
+      
+      if (isIOS) {
+        alert("To install this app on iOS:\n1. Tap the Share button\n2. Select 'Add to Home Screen'\n3. Tap 'Add'")
+      } else if (isAndroid) {
+        alert("To install this app on Android:\n1. Tap the menu (3 dots)\n2. Select 'Install app' or 'Add to Home screen'")
+      } else {
+        alert("To install this app:\n1. Look for the install icon in your browser's address bar\n2. Or use your browser's menu to find 'Install' option")
+      }
+      return
     }
 
-    setDeferredPrompt(null)
+    try {
+      console.log("[PWA Install] Showing install prompt...")
+      
+      // Show install prompt
+      await deferredPrompt.prompt()
+
+      // Wait for user response
+      const { outcome } = await deferredPrompt.userChoice
+
+      console.log("[PWA Install] User choice:", outcome)
+
+      if (outcome === "accepted") {
+        console.log("[PWA] ✅ User accepted install prompt")
+        setIsInstalled(true)
+        setShowBanner(false)
+      } else {
+        console.log("[PWA] ❌ User dismissed install prompt")
+      }
+    } catch (error) {
+      console.error("[PWA Install] Error showing prompt:", error)
+    } finally {
+      setDeferredPrompt(null)
+    }
   }
 
   const handleDismiss = () => {
@@ -121,41 +144,33 @@ export default function PWAInstallButton({ variant = "default", className = "" }
       ? sessionStorage.getItem("pwa-install-dismissed") === "true"
       : false
     
+    // Always show button, but make it more prominent when prompt is available
     return (
       <div className="mt-4">
-        {deferredPrompt && !isDismissed ? (
-          <>
-            <button
-              onClick={handleInstallClick}
-              className="w-full bg-white text-emerald-700 hover:bg-emerald-50 px-4 py-2 rounded-lg font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 shadow-md"
-            >
-              <Download size={18} />
-              <span>Install App</span>
-            </button>
-            <p className="text-xs text-emerald-200 mt-2 text-center">Get quick access and work offline</p>
-          </>
-        ) : (
-          <>
-            <button
-              onClick={() => {
-                // Try to trigger install if available
-                if (deferredPrompt) {
-                  handleInstallClick()
-                } else {
-                  console.log("[PWA Install] Install prompt not yet available. Make sure you're on HTTPS and the app meets PWA requirements.")
-                }
-              }}
-              className="w-full bg-emerald-600/80 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 hover:bg-emerald-600 shadow-md"
-              title={deferredPrompt ? "Click to install" : "Install prompt will appear when available (requires HTTPS)"}
-            >
-              <Download size={18} />
-              <span>Install App</span>
-            </button>
-            <p className="text-xs text-emerald-200 mt-2 text-center">
-              {deferredPrompt ? "Click to install" : "Available when install prompt appears"}
-            </p>
-          </>
-        )}
+        <button
+          onClick={handleInstallClick}
+          disabled={isDismissed && !deferredPrompt}
+          className={`w-full px-4 py-2 rounded-lg font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 shadow-md ${
+            deferredPrompt && !isDismissed
+              ? "bg-white text-emerald-700 hover:bg-emerald-50 cursor-pointer"
+              : "bg-emerald-600/80 text-white hover:bg-emerald-600 cursor-pointer"
+          } ${isDismissed && !deferredPrompt ? "opacity-50 cursor-not-allowed" : ""}`}
+          title={
+            deferredPrompt 
+              ? "Click to install the app" 
+              : isDismissed
+              ? "Install prompt dismissed. Clear browser data to see it again."
+              : "Install prompt will appear when available (requires HTTPS and PWA requirements)"
+          }
+        >
+          <Download size={18} />
+          <span>Install App</span>
+        </button>
+        <p className="text-xs text-emerald-200 mt-2 text-center">
+          {deferredPrompt && !isDismissed
+            ? "Get quick access and work offline"
+            : "Install available when browser prompts (HTTPS required)"}
+        </p>
       </div>
     )
   }
