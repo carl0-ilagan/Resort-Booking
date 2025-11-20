@@ -171,9 +171,9 @@ export default function AdminPage() {
     event.preventDefault()
     setBrandSaving(true)
     try {
-      updateBranding(brandForm)
+      await updateBranding(brandForm)
       setBrandSaved(true)
-      toast.success("Branding saved successfully.")
+      toast.success("Branding saved successfully to Firebase.")
       setTimeout(() => setBrandSaved(false), 2500)
     } catch (error) {
       console.error("Failed to save branding", error)
@@ -183,9 +183,15 @@ export default function AdminPage() {
     }
   }
 
-  const handleBrandReset = () => {
+  const handleBrandReset = async () => {
     setBrandForm(BRANDING_DEFAULTS)
-    updateBranding(BRANDING_DEFAULTS)
+    try {
+      await updateBranding(BRANDING_DEFAULTS)
+      toast.success("Branding reset to defaults.")
+    } catch (error) {
+      console.error("Failed to reset branding", error)
+      toast.error("Failed to reset branding. Please try again.")
+    }
   }
 
   const handleGoogleLogin = async () => {
@@ -439,7 +445,7 @@ export default function AdminPage() {
                 </button>
               )
             })}
-          </nav>
+        </nav>
 
           <div className={`border-t border-emerald-800 transition-all duration-300 ${
             sidebarExpanded ? "px-5" : "px-3 lg:px-3"
@@ -454,23 +460,23 @@ export default function AdminPage() {
               <p className="text-xs uppercase tracking-[0.25em] text-emerald-200 whitespace-nowrap">Signed in as</p>
               <p className="font-semibold whitespace-nowrap">{adminUser?.displayName ?? "Administrator"}</p>
             </div>
-            <button
+          <button
               onClick={handleLogout}
               className="relative w-full rounded-lg bg-red-600 py-2 font-semibold text-white transition-all duration-200 hover:bg-red-700 flex items-center justify-center"
-            >
+          >
               <span className={`transition-all duration-300 ${
                 (mobileSidebarVisible || sidebarExpanded)
                   ? "opacity-100 max-w-full" 
                   : "opacity-0 max-w-0 overflow-hidden lg:opacity-0 lg:max-w-0"
               }`}>
-                Logout
+            Logout
               </span>
               {!(mobileSidebarVisible || sidebarExpanded) && (
                 <span className="absolute inset-0 flex items-center justify-center opacity-0 lg:opacity-100 transition-opacity duration-300">
                   <LogOut size={18} />
                 </span>
               )}
-            </button>
+          </button>
           </div>
         </aside>
 

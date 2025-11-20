@@ -1,6 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import { db } from "@/lib/firebase"
+import { doc, getDoc, setDoc, onSnapshot } from "firebase/firestore"
 
 export type Branding = {
   name: string
@@ -16,7 +18,8 @@ export type Branding = {
   linkedin: string
 }
 
-const BRANDING_STORAGE_KEY = "luxestay-branding"
+const BRANDING_DOC_ID = "branding"
+const BRANDING_COLLECTION = "settings"
 
 export const BRANDING_DEFAULTS: Branding = {
   name: "LuxeStay",
@@ -32,22 +35,6 @@ export const BRANDING_DEFAULTS: Branding = {
   linkedin: "",
 }
 
-const readBranding = (): Branding => {
-  if (typeof window === "undefined") return BRANDING_DEFAULTS
-  try {
-    const stored = window.localStorage.getItem(BRANDING_STORAGE_KEY)
-    if (!stored) return BRANDING_DEFAULTS
-    const parsed = JSON.parse(stored)
-    return {
-      ...BRANDING_DEFAULTS,
-      ...parsed,
-    }
-  } catch (error) {
-    console.warn("Failed to parse branding from storage", error)
-    return BRANDING_DEFAULTS
-  }
-}
-
 const broadcastBranding = (payload: Branding) => {
   if (typeof window === "undefined") return
   window.dispatchEvent(
@@ -57,18 +44,76 @@ const broadcastBranding = (payload: Branding) => {
   )
 }
 
-export const persistBranding = (payload: Branding) => {
-  if (typeof window === "undefined") return
-  window.localStorage.setItem(BRANDING_STORAGE_KEY, JSON.stringify(payload))
-  broadcastBranding(payload)
+// Read branding from Firestore
+const readBrandingFromFirestore = async (): Promise<Branding> => {
+  try {
+    const brandingRef = doc(db, BRANDING_COLLECTION, BRANDING_DOC_ID)
+    const brandingSnap = await getDoc(brandingRef)
+    
+    if (brandingSnap.exists()) {
+      const data = brandingSnap.data()
+      return {
+        ...BRANDING_DEFAULTS,
+        ...data,
+      }
+    }
+    return BRANDING_DEFAULTS
+  } catch (error) {
+    console.error("Failed to read branding from Firestore", error)
+    return BRANDING_DEFAULTS
+  }
+}
+
+// Save branding to Firestore
+export const persistBranding = async (payload: Branding): Promise<void> => {
+  try {
+    const brandingRef = doc(db, BRANDING_COLLECTION, BRANDING_DOC_ID)
+    await setDoc(brandingRef, payload, { merge: true })
+    console.log("Branding saved to Firestore successfully")
+    broadcastBranding(payload)
+  } catch (error) {
+    console.error("Failed to save branding to Firestore", error)
+    throw error
+  }
 }
 
 export const useBranding = () => {
   const [branding, setBranding] = useState<Branding>(BRANDING_DEFAULTS)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    setBranding(readBranding())
+    // Initial load
+    readBrandingFromFirestore().then((data) => {
+      setBranding(data)
+      setLoading(false)
+    })
 
+    // Listen for real-time updates from Firestore
+    const brandingRef = doc(db, BRANDING_COLLECTION, BRANDING_DOC_ID)
+    const unsubscribe = onSnapshot(
+      brandingRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data() as Branding
+          const updatedBranding = {
+            ...BRANDING_DEFAULTS,
+            ...data,
+          }
+          setBranding(updatedBranding)
+          broadcastBranding(updatedBranding)
+        } else {
+          // Document doesn't exist, use defaults
+          setBranding(BRANDING_DEFAULTS)
+        }
+        setLoading(false)
+      },
+      (error) => {
+        console.error("Error listening to branding updates:", error)
+        setLoading(false)
+      }
+    )
+
+    // Also listen for custom events (for immediate UI updates)
     const handleUpdate = (event: Event) => {
       if ("detail" in event) {
         const detail = (event as CustomEvent<Branding>).detail
@@ -76,21 +121,32 @@ export const useBranding = () => {
       }
     }
 
-    window.addEventListener("branding:update", handleUpdate as EventListener)
-    return () => window.removeEventListener("branding:update", handleUpdate as EventListener)
+    if (typeof window !== "undefined") {
+      window.addEventListener("branding:update", handleUpdate as EventListener)
+    }
+
+    return () => {
+      unsubscribe()
+      if (typeof window !== "undefined") {
+        window.removeEventListener("branding:update", handleUpdate as EventListener)
+      }
+    }
   }, [])
 
-  const updateBranding = useCallback((payload: Branding) => {
+  const updateBranding = useCallback(async (payload: Branding) => {
     setBranding(payload)
-    persistBranding(payload)
+    await persistBranding(payload)
   }, [])
 
   return {
     branding,
     updateBranding,
+    loading,
   }
 }
 
-export const resetBranding = () => persistBranding(BRANDING_DEFAULTS)
+export const resetBranding = async () => {
+  await persistBranding(BRANDING_DEFAULTS)
+}
 
 
