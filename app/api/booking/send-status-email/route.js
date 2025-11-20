@@ -86,32 +86,79 @@ function calculateNights(checkIn, checkOut) {
 // Helper function to fetch room price from Firestore
 async function getRoomPrice(roomType) {
   try {
-    const roomsRef = collection(db, "rooms")
-    // Try matching by type first, then by name
-    let q = query(roomsRef, where("type", "==", roomType.trim()))
-    let querySnapshot = await getDocs(q)
-    
-    // If no match by type, try by name
-    if (querySnapshot.empty) {
-      q = query(roomsRef, where("name", "==", roomType.trim()))
-      querySnapshot = await getDocs(q)
+    if (!roomType || !roomType.trim()) {
+      console.warn("getRoomPrice: roomType is empty")
+      return 0
     }
+
+    const trimmedRoomType = roomType.trim()
+    const roomsRef = collection(db, "rooms")
     
-    if (!querySnapshot.empty) {
-      const roomData = querySnapshot.docs[0].data()
-      const price = roomData.price || 0
-      const discount = roomData.discount || 0
+    // Get all rooms first for flexible matching
+    const allRoomsSnapshot = await getDocs(roomsRef)
+    
+    if (allRoomsSnapshot.empty) {
+      console.warn("No rooms found in Firestore")
+      return 0
+    }
+
+    console.log(`Searching for room: "${trimmedRoomType}"`)
+    console.log(`Total rooms in database: ${allRoomsSnapshot.size}`)
+    
+    // Log all available room types and names for debugging
+    const availableRooms = allRoomsSnapshot.docs.map(doc => {
+      const data = doc.data()
+      return { id: doc.id, type: data.type, name: data.name, price: data.price }
+    })
+    console.log("Available rooms:", JSON.stringify(availableRooms, null, 2))
+
+    // Try exact match by type (case-insensitive)
+    let matchedRoom = allRoomsSnapshot.docs.find(doc => {
+      const data = doc.data()
+      return data.type?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
+    })
+
+    // If no match by type, try exact match by name (case-insensitive)
+    if (!matchedRoom) {
+      matchedRoom = allRoomsSnapshot.docs.find(doc => {
+        const data = doc.data()
+        return data.name?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
+      })
+    }
+
+    // If still no match, try partial match (contains)
+    if (!matchedRoom) {
+      matchedRoom = allRoomsSnapshot.docs.find(doc => {
+        const data = doc.data()
+        const roomTypeLower = data.type?.trim().toLowerCase() || ""
+        const roomNameLower = data.name?.trim().toLowerCase() || ""
+        const searchLower = trimmedRoomType.toLowerCase()
+        return roomTypeLower.includes(searchLower) || roomNameLower.includes(searchLower) ||
+               searchLower.includes(roomTypeLower) || searchLower.includes(roomNameLower)
+      })
+    }
+
+    if (matchedRoom) {
+      const roomData = matchedRoom.data()
+      const price = Number(roomData.price) || 0
+      const discount = Number(roomData.discount) || 0
       // Calculate price after discount
       const finalPrice = discount > 0 ? price * (1 - discount / 100) : price
-      console.log(`Room price found for "${roomType}": ${price}, discount: ${discount}%, final: ${finalPrice}`)
+      console.log(`✅ Room price found for "${trimmedRoomType}": type="${roomData.type}", name="${roomData.name}", price=${price}, discount=${discount}%, final=${finalPrice}`)
       return finalPrice
     }
     
-    // If room not found, log warning and return 0
-    console.warn(`Room not found in Firestore for type/name: "${roomType}"`)
+    // If room not found, log warning with all available options
+    console.error(`❌ Room not found in Firestore for: "${trimmedRoomType}"`)
+    console.error("Available room types:", availableRooms.map(r => r.type).filter(Boolean).join(", "))
+    console.error("Available room names:", availableRooms.map(r => r.name).filter(Boolean).join(", "))
     return 0
   } catch (error) {
     console.error("Error fetching room price:", error)
+    console.error("Error details:", {
+      message: error.message,
+      stack: error.stack,
+    })
     return 0
   }
 }
