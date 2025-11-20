@@ -84,11 +84,13 @@ async function getRoomPrice(roomType) {
 
 export async function POST(request) {
   try {
-    const { email, name, roomType, checkIn, checkOut, status, bookingId } = await request.json()
+    let { email, name, roomType, checkIn, checkOut, status, bookingId } = await request.json()
 
     if (!email || !status) {
       return NextResponse.json({ error: "Email and status are required" }, { status: 400 })
     }
+    
+    console.log("Send status email called:", { email, name, roomType, checkIn, checkOut, status, bookingId })
 
     // Check if email credentials are configured
     const emailPassword = process.env.EMAIL_PASSWORD || process.env.EMAIL_PASS
