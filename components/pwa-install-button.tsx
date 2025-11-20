@@ -153,28 +153,35 @@ export default function PWAInstallButton({ variant = "default", className = "" }
   }
 
   if (variant === "footer") {
-    // Footer variant - show as button in footer section
+    // Footer variant - always show button in footer section
     const isDismissed = typeof window !== 'undefined' && window.sessionStorage 
       ? sessionStorage.getItem("pwa-install-dismissed") === "true"
       : false
     
-    // Only show button if deferredPrompt is available (install is ready)
-    if (!deferredPrompt || isDismissed) {
-      return null // Don't show button if install prompt is not available
-    }
-    
+    // Always show button, but make it active only when prompt is available
     return (
       <div className="mt-4">
         <button
           onClick={handleInstallClick}
-          className="w-full bg-white text-emerald-700 hover:bg-emerald-50 px-4 py-2 rounded-lg font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 shadow-md cursor-pointer"
-          title="Click to install the app"
+          disabled={isDismissed}
+          className={`w-full px-4 py-2 rounded-lg font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 shadow-md ${
+            deferredPrompt && !isDismissed
+              ? "bg-white text-emerald-700 hover:bg-emerald-50 cursor-pointer"
+              : "bg-emerald-600/80 text-white hover:bg-emerald-600 cursor-pointer opacity-75"
+          } ${isDismissed ? "opacity-50 cursor-not-allowed" : ""}`}
+          title={
+            deferredPrompt && !isDismissed
+              ? "Click to install the app"
+              : "Install will be available when browser prompts (requires HTTPS)"
+          }
         >
           <Download size={18} />
           <span>Install App</span>
         </button>
         <p className="text-xs text-emerald-200 mt-2 text-center">
-          Get quick access and work offline
+          {deferredPrompt && !isDismissed
+            ? "Get quick access and work offline"
+            : "Install available when browser prompts"}
         </p>
       </div>
     )

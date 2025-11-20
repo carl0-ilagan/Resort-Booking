@@ -189,13 +189,29 @@ export async function POST(request) {
               }
             } else {
               console.error("Failed to create payment link:", paymongoData.errors?.[0]?.detail || "Unknown error")
+              console.error("PayMongo response:", JSON.stringify(paymongoData, null, 2))
             }
+          } else {
+            console.error("PayMongo secret key not configured")
           }
         } catch (paymentError) {
           console.error("Error creating payment link:", paymentError)
+          console.error("Payment error details:", {
+            message: paymentError.message,
+            stack: paymentError.stack,
+          })
           // Continue without payment link - booking is still approved
         }
+      } else {
+        console.warn(`Cannot create payment link: totalAmount is ${totalAmount} (pricePerNight: ${pricePerNight}, nights: ${numberOfNights})`)
       }
+    } else {
+      console.warn("Cannot create payment link: missing required fields", {
+        status,
+        roomType,
+        checkIn,
+        checkOut,
+      })
     }
 
     // Email content based on status
