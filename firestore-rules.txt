@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Allow public bookings (no auth required) - for OTP booking system
+    match /guestbooking/{document=**} {
+      allow create: if true;  // Anyone can create a booking
+      allow read: if true;  // Allow public read for availability checking (API routes need this)
+      // Allow updates from server-side API routes (status changes)
+      // Note: In production, consider using Firebase Admin SDK for better security
+      allow update: if true;  // Allow updates (API routes are server-side)
+      allow delete: if request.auth != null;  // Only admins can delete
+    }
+    
+    // Rooms collection - allow public read, auth required for write
+    match /rooms/{document=**} {
+      allow read: if true;  // Public can view rooms
+      allow write: if request.auth != null;  // Only admins can modify
+    }
+    
+    // Contact messages collection
+    match /contactMessages/{document=**} {
+      allow create: if true;  // Anyone can send contact messages
+      allow read, update, delete: if request.auth != null;  // Only admins can view/update/delete
+    }
+    
+    // Feedbacks collection
+    match /feedbacks/{document=**} {
+      allow create: if true;  // Anyone can submit feedback
+      allow read: if true;  // Public can view published feedbacks
+      allow update, delete: if request.auth != null;  // Only admins can update/delete
+    }
+    
+    // All other collections require authentication
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+
