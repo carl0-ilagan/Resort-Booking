@@ -15,6 +15,8 @@ export default function PWAInstallButton({ variant = "default", className = "" }
   const [showBanner, setShowBanner] = useState(false)
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    
     // Check if already installed
     if (window.matchMedia("(display-mode: standalone)").matches || (window.navigator as any).standalone) {
       setIsInstalled(true)
@@ -38,6 +40,7 @@ export default function PWAInstallButton({ variant = "default", className = "" }
 
     // Check if app is already installed
     const checkInstalled = () => {
+      if (typeof window === 'undefined') return
       if (window.matchMedia("(display-mode: standalone)").matches || (window.navigator as any).standalone) {
         setIsInstalled(true)
         setShowBanner(false)
@@ -48,7 +51,9 @@ export default function PWAInstallButton({ variant = "default", className = "" }
     const interval = setInterval(checkInstalled, 1000)
 
     return () => {
-      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt)
+      if (typeof window !== 'undefined') {
+        window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt)
+      }
       clearInterval(interval)
     }
   }, [])
@@ -76,13 +81,17 @@ export default function PWAInstallButton({ variant = "default", className = "" }
   const handleDismiss = () => {
     setShowBanner(false)
     // Store dismissal in sessionStorage (not localStorage) to not show again for this session only
-    sessionStorage.setItem("pwa-install-dismissed", "true")
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      sessionStorage.setItem("pwa-install-dismissed", "true")
+    }
   }
 
   // Check if user dismissed in this session
   useEffect(() => {
-    if (sessionStorage.getItem("pwa-install-dismissed") === "true") {
-      setShowBanner(false)
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      if (sessionStorage.getItem("pwa-install-dismissed") === "true") {
+        setShowBanner(false)
+      }
     }
   }, [])
 
@@ -108,7 +117,9 @@ export default function PWAInstallButton({ variant = "default", className = "" }
   if (variant === "footer") {
     // Footer variant - show as button in footer section
     // Always show the button, but enable it only when prompt is available
-    const isDismissed = sessionStorage.getItem("pwa-install-dismissed") === "true"
+    const isDismissed = typeof window !== 'undefined' && window.sessionStorage 
+      ? sessionStorage.getItem("pwa-install-dismissed") === "true"
+      : false
     
     return (
       <div className="mt-4">
@@ -151,7 +162,9 @@ export default function PWAInstallButton({ variant = "default", className = "" }
 
   if (variant === "footer-banner") {
     // Footer banner variant (fixed bottom)
-    const isDismissed = sessionStorage.getItem("pwa-install-dismissed") === "true"
+    const isDismissed = typeof window !== 'undefined' && window.sessionStorage
+      ? sessionStorage.getItem("pwa-install-dismissed") === "true"
+      : false
     if (isDismissed || !showBanner || !deferredPrompt) return null
     
     return (

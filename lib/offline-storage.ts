@@ -23,6 +23,11 @@ class OfflineStorage {
   private initPromise: Promise<void> | null = null
 
   async init(): Promise<void> {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      console.warn('[OfflineStorage] IndexedDB not available (SSR or unsupported browser)')
+      return Promise.resolve()
+    }
+    
     if (this.db) return
     if (this.initPromise) return this.initPromise
 
@@ -179,10 +184,21 @@ export const offlineStorage = new OfflineStorage()
 
 // Sync Manager
 export class SyncManager {
-  private isOnline = navigator.onLine
+  private isOnline: boolean
   private syncInProgress = false
+  private syncInterval: NodeJS.Timeout | null = null
 
   constructor() {
+    // Only initialize on client side
+    if (typeof window === 'undefined') {
+      this.isOnline = false
+      return
+    }
+
+    // Check online status
+    this.isOnline = window.navigator?.onLine !== false
+
+    // Listen for online/offline events
     window.addEventListener('online', () => {
       console.log('[SyncManager] Back online, syncing...')
       this.isOnline = true
@@ -200,7 +216,7 @@ export class SyncManager {
     }
 
     // Periodic sync check
-    setInterval(() => {
+    this.syncInterval = setInterval(() => {
       if (this.isOnline && !this.syncInProgress) {
         this.sync()
       }
@@ -339,5 +355,9 @@ export class SyncManager {
   }
 }
 
-export const syncManager = new SyncManager()
+// Create syncManager only on client side to avoid SSR issues
+export const syncManager = typeof window !== 'undefined' ? new SyncManager() : {
+  submitWithOfflineSupport: async () => ({ success: false, error: 'Client-side only' }),
+  sync: async () => {},
+} as any
 

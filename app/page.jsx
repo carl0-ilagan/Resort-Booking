@@ -57,11 +57,13 @@ function RoomCard({ room, onViewDetails, onImageClick }) {
   const handleBookNow = (e) => {
     e.stopPropagation()
     // Pre-fill the room type in booking form
-    window.dispatchEvent(
-      new CustomEvent("prefillRoom", {
-        detail: { roomName: room.name },
-      })
-    )
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent("prefillRoom", {
+          detail: { roomName: room.name },
+        })
+      )
+    }
     document.getElementById("booking")?.scrollIntoView({ behavior: "smooth" })
   }
 
