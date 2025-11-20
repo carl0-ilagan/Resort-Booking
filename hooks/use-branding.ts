@@ -47,19 +47,30 @@ const broadcastBranding = (payload: Branding) => {
 // Read branding from Firestore
 const readBrandingFromFirestore = async (): Promise<Branding> => {
   try {
+    if (!db) {
+      console.warn("Firebase database not initialized, using defaults")
+      return BRANDING_DEFAULTS
+    }
+
     const brandingRef = doc(db, BRANDING_COLLECTION, BRANDING_DOC_ID)
     const brandingSnap = await getDoc(brandingRef)
     
     if (brandingSnap.exists()) {
       const data = brandingSnap.data()
+      console.log("✅ Branding loaded from Firestore:", data)
       return {
         ...BRANDING_DEFAULTS,
         ...data,
       }
     }
+    console.log("ℹ️ No branding document found in Firestore, using defaults")
     return BRANDING_DEFAULTS
   } catch (error) {
-    console.error("Failed to read branding from Firestore", error)
+    console.error("❌ Failed to read branding from Firestore", error)
+    console.error("Error details:", {
+      message: error.message,
+      code: error.code,
+    })
     return BRANDING_DEFAULTS
   }
 }
@@ -67,12 +78,28 @@ const readBrandingFromFirestore = async (): Promise<Branding> => {
 // Save branding to Firestore
 export const persistBranding = async (payload: Branding): Promise<void> => {
   try {
+    if (!db) {
+      throw new Error("Firebase database not initialized")
+    }
+
+    console.log("Saving branding to Firestore:", {
+      collection: BRANDING_COLLECTION,
+      docId: BRANDING_DOC_ID,
+      payload: payload,
+    })
+
     const brandingRef = doc(db, BRANDING_COLLECTION, BRANDING_DOC_ID)
     await setDoc(brandingRef, payload, { merge: true })
-    console.log("Branding saved to Firestore successfully")
+    
+    console.log("✅ Branding saved to Firestore successfully")
     broadcastBranding(payload)
   } catch (error) {
-    console.error("Failed to save branding to Firestore", error)
+    console.error("❌ Failed to save branding to Firestore:", error)
+    console.error("Error details:", {
+      message: error.message,
+      code: error.code,
+      stack: error.stack,
+    })
     throw error
   }
 }
@@ -82,9 +109,21 @@ export const useBranding = () => {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // Check if db is available
+    if (!db) {
+      console.error("❌ Firestore db is not initialized")
+      setLoading(false)
+      return
+    }
+
+    console.log("🔄 Loading branding from Firestore...")
+    
     // Initial load
     readBrandingFromFirestore().then((data) => {
       setBranding(data)
+      setLoading(false)
+    }).catch((error) => {
+      console.error("❌ Error loading branding:", error)
       setLoading(false)
     })
 
@@ -122,7 +161,7 @@ export const useBranding = () => {
     }
 
     if (typeof window !== "undefined") {
-      window.addEventListener("branding:update", handleUpdate as EventListener)
+    window.addEventListener("branding:update", handleUpdate as EventListener)
     }
 
     return () => {
@@ -134,8 +173,15 @@ export const useBranding = () => {
   }, [])
 
   const updateBranding = useCallback(async (payload: Branding) => {
-    setBranding(payload)
-    await persistBranding(payload)
+    console.log("updateBranding called with payload:", payload)
+    try {
+      setBranding(payload)
+      await persistBranding(payload)
+      console.log("✅ updateBranding completed successfully")
+    } catch (error) {
+      console.error("❌ updateBranding failed:", error)
+      throw error
+    }
   }, [])
 
   return {

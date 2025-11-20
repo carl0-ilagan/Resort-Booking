@@ -170,6 +170,7 @@ export default function AdminPage() {
   const handleBrandingSubmit = async (event) => {
     event.preventDefault()
     setBrandSaving(true)
+    console.log("handleBrandingSubmit called with brandForm:", brandForm)
     try {
       await updateBranding(brandForm)
       setBrandSaved(true)
@@ -177,7 +178,12 @@ export default function AdminPage() {
       setTimeout(() => setBrandSaved(false), 2500)
     } catch (error) {
       console.error("Failed to save branding", error)
-      toast.error("Failed to save branding. Please try again.")
+      console.error("Error details:", {
+        message: error.message,
+        code: error.code,
+        stack: error.stack,
+      })
+      toast.error(`Failed to save branding: ${error.message || "Please try again."}`)
     } finally {
       setBrandSaving(false)
     }
