@@ -19,16 +19,18 @@ export default function PWAInstallButton({ variant = "default", className = "" }
     
     // Check if already installed
     if (window.matchMedia("(display-mode: standalone)").matches || (window.navigator as any).standalone) {
+      console.log("[PWA Install] App is already installed")
       setIsInstalled(true)
       return
     }
 
-    // Listen for beforeinstallprompt event
+    // Listen for beforeinstallprompt event - this is the key event for PWA install
     const handleBeforeInstallPrompt = (e: Event) => {
-      console.log("[PWA Install] beforeinstallprompt event fired")
-      e.preventDefault()
+      console.log("[PWA Install] ✅ beforeinstallprompt event fired - Install is available!")
+      e.preventDefault() // Prevent the default browser install prompt
       setDeferredPrompt(e as BeforeInstallPromptEvent)
       setShowBanner(true)
+      console.log("[PWA Install] Deferred prompt saved, install button is now active")
     }
 
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt)
@@ -37,6 +39,15 @@ export default function PWAInstallButton({ variant = "default", className = "" }
     console.log("[PWA Install] Component mounted, checking installability...")
     console.log("[PWA Install] Standalone mode:", window.matchMedia("(display-mode: standalone)").matches)
     console.log("[PWA Install] Service worker support:", "serviceWorker" in navigator)
+    console.log("[PWA Install] Waiting for beforeinstallprompt event...")
+    
+    // Check if we're on HTTPS
+    const isHTTPS = window.location.protocol === 'https:' || window.location.hostname === 'localhost'
+    console.log("[PWA Install] HTTPS:", isHTTPS)
+    
+    // Check manifest
+    const manifestLink = document.querySelector('link[rel="manifest"]')
+    console.log("[PWA Install] Manifest link found:", !!manifestLink)
 
     // Check if app is already installed
     const checkInstalled = () => {
@@ -60,19 +71,22 @@ export default function PWAInstallButton({ variant = "default", className = "" }
 
   const handleInstallClick = async () => {
     if (!deferredPrompt) {
-      console.log("[PWA Install] No deferred prompt available. Checking installability...")
+      console.log("[PWA Install] No deferred prompt available yet")
+      console.log("[PWA Install] Checking PWA requirements...")
       
-      // Try to show manual install instructions
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-      const isAndroid = /Android/.test(navigator.userAgent)
-      
-      if (isIOS) {
-        alert("To install this app on iOS:\n1. Tap the Share button\n2. Select 'Add to Home Screen'\n3. Tap 'Add'")
-      } else if (isAndroid) {
-        alert("To install this app on Android:\n1. Tap the menu (3 dots)\n2. Select 'Install app' or 'Add to Home screen'")
-      } else {
-        alert("To install this app:\n1. Look for the install icon in your browser's address bar\n2. Or use your browser's menu to find 'Install' option")
+      // Check if service worker is registered
+      if ('serviceWorker' in navigator) {
+        const registration = await navigator.serviceWorker.getRegistration()
+        console.log("[PWA Install] Service Worker registered:", !!registration)
       }
+      
+      // Check if manifest is loaded
+      const manifestLink = document.querySelector('link[rel="manifest"]')
+      console.log("[PWA Install] Manifest link:", !!manifestLink)
+      
+      // For now, just log - don't show alert
+      console.warn("[PWA Install] Install prompt not available. The browser will show it automatically when requirements are met.")
+      console.warn("[PWA Install] Requirements: HTTPS, valid manifest, service worker, and user engagement")
       return
     }
 
@@ -91,13 +105,14 @@ export default function PWAInstallButton({ variant = "default", className = "" }
         console.log("[PWA] ✅ User accepted install prompt")
         setIsInstalled(true)
         setShowBanner(false)
+        setDeferredPrompt(null)
       } else {
         console.log("[PWA] ❌ User dismissed install prompt")
+        setDeferredPrompt(null)
       }
     } catch (error) {
       console.error("[PWA Install] Error showing prompt:", error)
-    } finally {
-      setDeferredPrompt(null)
+      // Don't clear deferredPrompt on error, might be temporary
     }
   }
 
@@ -139,37 +154,27 @@ export default function PWAInstallButton({ variant = "default", className = "" }
 
   if (variant === "footer") {
     // Footer variant - show as button in footer section
-    // Always show the button, but enable it only when prompt is available
     const isDismissed = typeof window !== 'undefined' && window.sessionStorage 
       ? sessionStorage.getItem("pwa-install-dismissed") === "true"
       : false
     
-    // Always show button, but make it more prominent when prompt is available
+    // Only show button if deferredPrompt is available (install is ready)
+    if (!deferredPrompt || isDismissed) {
+      return null // Don't show button if install prompt is not available
+    }
+    
     return (
       <div className="mt-4">
         <button
           onClick={handleInstallClick}
-          disabled={isDismissed && !deferredPrompt}
-          className={`w-full px-4 py-2 rounded-lg font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 shadow-md ${
-            deferredPrompt && !isDismissed
-              ? "bg-white text-emerald-700 hover:bg-emerald-50 cursor-pointer"
-              : "bg-emerald-600/80 text-white hover:bg-emerald-600 cursor-pointer"
-          } ${isDismissed && !deferredPrompt ? "opacity-50 cursor-not-allowed" : ""}`}
-          title={
-            deferredPrompt 
-              ? "Click to install the app" 
-              : isDismissed
-              ? "Install prompt dismissed. Clear browser data to see it again."
-              : "Install prompt will appear when available (requires HTTPS and PWA requirements)"
-          }
+          className="w-full bg-white text-emerald-700 hover:bg-emerald-50 px-4 py-2 rounded-lg font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 shadow-md cursor-pointer"
+          title="Click to install the app"
         >
           <Download size={18} />
           <span>Install App</span>
         </button>
         <p className="text-xs text-emerald-200 mt-2 text-center">
-          {deferredPrompt && !isDismissed
-            ? "Get quick access and work offline"
-            : "Install available when browser prompts (HTTPS required)"}
+          Get quick access and work offline
         </p>
       </div>
     )
