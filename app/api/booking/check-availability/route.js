@@ -63,9 +63,58 @@ export async function POST(request) {
       newCheckOut: checkOut,
     })
 
-
-
-
+    // First, check if the room itself is available (not maintenance or unavailable)
+    try {
+      const { collection: roomsCollection, getDocs } = await import("firebase/firestore")
+      const roomsRef = roomsCollection(db, "rooms")
+      const allRoomsSnapshot = await getDocs(roomsRef)
+      
+      if (!allRoomsSnapshot.empty) {
+        // Try exact match by name first (case-insensitive)
+        let matchedRoom = allRoomsSnapshot.docs.find(doc => {
+          const data = doc.data()
+          return data.name?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
+        })
+        
+        // If no match by name, try by type
+        if (!matchedRoom) {
+          matchedRoom = allRoomsSnapshot.docs.find(doc => {
+            const data = doc.data()
+            return data.type?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
+          })
+        }
+        
+        // If still no match, try partial match
+        if (!matchedRoom) {
+          matchedRoom = allRoomsSnapshot.docs.find(doc => {
+            const data = doc.data()
+            const roomTypeLower = data.type?.trim().toLowerCase() || ""
+            const roomNameLower = data.name?.trim().toLowerCase() || ""
+            const searchLower = trimmedRoomType.toLowerCase()
+            return roomTypeLower.includes(searchLower) || roomNameLower.includes(searchLower) ||
+                   searchLower.includes(roomTypeLower) || searchLower.includes(roomNameLower)
+          })
+        }
+        
+        if (matchedRoom) {
+          const roomData = matchedRoom.data()
+          const availability = roomData.availability?.trim() || roomData.availability
+          
+          // Only "Available" rooms can be booked
+          if (availability && availability !== "Available") {
+            return NextResponse.json({
+              available: false,
+              conflicts: [],
+              message: `This room is currently ${availability.toLowerCase()}. Only available rooms can be booked.`,
+              roomUnavailable: true
+            })
+          }
+        }
+      }
+    } catch (roomCheckError) {
+      console.error("Error checking room availability:", roomCheckError)
+      // Continue with date check if room check fails (don't block legitimate bookings)
+    }
 
 
 

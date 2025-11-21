@@ -253,6 +253,19 @@ export async function POST(request) {
         
         if (matchedRoom) {
           const roomData = matchedRoom.data()
+          
+          // Check room availability - only "Available" rooms can be booked
+          const availability = roomData.availability?.trim() || roomData.availability
+          if (availability && availability !== "Available") {
+            return NextResponse.json(
+              { 
+                error: `This room is currently ${availability.toLowerCase()}. Only available rooms can be booked.`,
+                roomUnavailable: true
+              },
+              { status: 400 }
+            )
+          }
+          
           const price = Number(roomData.price) || 0
           const discount = Number(roomData.discount) || 0
           pricePerNight = discount > 0 ? price * (1 - discount / 100) : price
