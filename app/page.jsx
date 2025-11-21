@@ -58,11 +58,11 @@ function RoomCard({ room, onViewDetails, onImageClick }) {
     e.stopPropagation()
     // Pre-fill the room type in booking form
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent("prefillRoom", {
-          detail: { roomName: room.name },
-        })
-      )
+    window.dispatchEvent(
+      new CustomEvent("prefillRoom", {
+        detail: { roomName: room.name },
+      })
+    )
     }
     document.getElementById("booking")?.scrollIntoView({ behavior: "smooth" })
   }
@@ -585,12 +585,12 @@ export default function Home() {
           })
           setOtpSent(false)
           setOtpCode("")
-          setBookingConfirmed(true)
+    setBookingConfirmed(true)
         } else if (result.offlineId) {
           // Saved for offline - show success message
           toast.success("Your booking is saved offline and will be submitted when you're back online!", {
             duration: 6000,
-          })
+            })
           // Reset form
           setFormData({
             name: "",
@@ -601,11 +601,11 @@ export default function Home() {
             guests: "",
             roomType: "",
             specialRequests: "",
-          })
+            })
           setOtpSent(false)
           setOtpCode("")
           setBookingConfirmed(true)
-        } else {
+          } else {
           toast.error(result.error || "Failed to submit booking. Please try again.")
         }
       } catch (error) {
@@ -737,7 +737,7 @@ export default function Home() {
 
       if (result.success) {
         toast.success("Thank you for your feedback! We appreciate your input.")
-        setFeedback({ name: "", email: "", rating: 5, message: "" })
+    setFeedback({ name: "", email: "", rating: 5, message: "" })
       } else if (result.offlineId) {
         toast.success("Your feedback is saved offline and will be submitted when you're back online!")
         setFeedback({ name: "", email: "", rating: 5, message: "" })
@@ -772,7 +772,7 @@ export default function Home() {
 
       if (result.success) {
         toast.success("Message sent successfully! We'll get back to you soon.")
-        setContact({ name: "", email: "", message: "" })
+    setContact({ name: "", email: "", message: "" })
       } else if (result.offlineId) {
         toast.success("Your message is saved offline and will be sent when you're back online!")
         setContact({ name: "", email: "", message: "" })
@@ -1929,18 +1929,18 @@ export default function Home() {
               <div className="flex space-x-4 mb-4">
                 {branding.facebook && (
                   <a href={branding.facebook} target="_blank" rel="noopener noreferrer" className="bg-emerald-700 p-2 rounded hover:bg-emerald-600 transition">
-                    f
-                  </a>
+                  f
+                </a>
                 )}
                 {branding.twitter && (
                   <a href={branding.twitter} target="_blank" rel="noopener noreferrer" className="bg-emerald-700 p-2 rounded hover:bg-emerald-600 transition">
-                    𝕏
-                  </a>
+                  𝕏
+                </a>
                 )}
                 {branding.linkedin && (
                   <a href={branding.linkedin} target="_blank" rel="noopener noreferrer" className="bg-emerald-700 p-2 rounded hover:bg-emerald-600 transition">
-                    in
-                  </a>
+                  in
+                </a>
                 )}
                 {!branding.facebook && !branding.twitter && !branding.linkedin && (
                   <p className="text-emerald-100 text-sm">No social links configured</p>

@@ -73,7 +73,7 @@ export default function ManageFeedback() {
 
   const handleDeleteClick = (feedback) => {
     setDeleteFeedback(feedback)
-  }
+    }
 
   const handleDeleteConfirm = async () => {
     if (!deleteFeedback || processingId) return
@@ -210,8 +210,8 @@ export default function ManageFeedback() {
           <Skeleton className="h-10 w-10 rounded-lg" />
         </div>
       </div>
-    </div>
-  )
+      </div>
+    )
 
   return (
     <div>
@@ -409,7 +409,7 @@ export default function ManageFeedback() {
                           className="p-2 bg-red-100 text-red-800 rounded hover:bg-red-200 transition disabled:opacity-50 disabled:cursor-not-allowed"
                           title="Delete Feedback"
                         >
-                          <Trash2 size={16} />
+                            <Trash2 size={16} />
                         </button>
                       </div>
                     </td>
@@ -500,7 +500,7 @@ export default function ManageFeedback() {
               </DialogDescription>
             )}
           </DialogHeader>
-          {selectedFeedback && (
+      {selectedFeedback && (
             <div className={`space-y-3 ${isMobile ? 'mt-1' : 'mt-4'}`}>
               <div className={`grid ${isMobile ? 'grid-cols-1 gap-2' : 'grid-cols-2 gap-4'}`}>
                 <div>

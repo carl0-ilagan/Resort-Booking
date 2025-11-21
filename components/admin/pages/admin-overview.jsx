@@ -527,19 +527,19 @@ export default function AdminOverview() {
           ))
         ) : (
           STATS_CONFIG.map((stat) => {
-            const Icon = stat.icon
-            return (
+          const Icon = stat.icon
+          return (
               <div key={stat.key} className="bg-card rounded-xl p-6 shadow-lg border border-border">
-                <div className="flex items-start justify-between mb-4">
-                  <div>
-                    <p className="text-muted-foreground text-sm font-medium">{stat.label}</p>
-                    <p className="text-3xl font-bold text-foreground mt-2">{stat.value}</p>
-                  </div>
-                  <Icon className={`w-10 h-10 ${stat.color}`} />
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <p className="text-muted-foreground text-sm font-medium">{stat.label}</p>
+                  <p className="text-3xl font-bold text-foreground mt-2">{stat.value}</p>
                 </div>
-                <div className="h-1 bg-secondary rounded-full" />
+                <Icon className={`w-10 h-10 ${stat.color}`} />
               </div>
-            )
+              <div className="h-1 bg-secondary rounded-full" />
+            </div>
+          )
           })
         )}
       </div>
@@ -685,28 +685,28 @@ export default function AdminOverview() {
                 </tr>
               ) : (
                 recentBookings.map((booking) => (
-                  <tr key={booking.id} className="border-b border-border hover:bg-secondary/30">
-                    <td className="py-3 px-4">{booking.id}</td>
-                    <td className="py-3 px-4">{booking.guest}</td>
-                    <td className="py-3 px-4">{booking.room}</td>
-                    <td className="py-3 px-4">{booking.date}</td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                          booking.status === "Approved"
+                <tr key={booking.id} className="border-b border-border hover:bg-secondary/30">
+                  <td className="py-3 px-4">{booking.id}</td>
+                  <td className="py-3 px-4">{booking.guest}</td>
+                  <td className="py-3 px-4">{booking.room}</td>
+                  <td className="py-3 px-4">{booking.date}</td>
+                  <td className="py-3 px-4">
+                    <span
+                      className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                        booking.status === "Approved"
                             ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
-                            : booking.status === "Pending"
+                          : booking.status === "Pending"
                               ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
                               : booking.status === "Completed"
                                 ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
                                 : booking.status === "Cancelled"
                                   ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
                                   : "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400"
-                        }`}
-                      >
-                        {booking.status}
-                      </span>
-                    </td>
+                      }`}
+                    >
+                      {booking.status}
+                    </span>
+                  </td>
                     <td className="py-3 px-4">
                       <span
                         className={`px-3 py-1 rounded-full text-xs font-semibold ${
@@ -718,7 +718,7 @@ export default function AdminOverview() {
                         {booking.paymentStatus === "paid" ? "Paid" : "Unpaid"}
                       </span>
                     </td>
-                  </tr>
+                </tr>
                 ))
               )}
             </tbody>
