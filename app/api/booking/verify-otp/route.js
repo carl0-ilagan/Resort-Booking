@@ -214,6 +214,58 @@ export async function POST(request) {
       // Continue with booking if date check fails (don't block legitimate bookings)
     }
 
+    // Calculate price per night from room data
+    let pricePerNight = 0
+    try {
+      const { collection: roomsCollection, getDocs, query: roomsQuery, where: roomsWhere } = await import("firebase/firestore")
+      const roomsRef = roomsCollection(db, "rooms")
+      const trimmedRoomType = roomType.trim()
+      
+      // Get all rooms for flexible matching
+      const allRoomsSnapshot = await getDocs(roomsRef)
+      
+      if (!allRoomsSnapshot.empty) {
+        // Try exact match by name first (case-insensitive)
+        let matchedRoom = allRoomsSnapshot.docs.find(doc => {
+          const data = doc.data()
+          return data.name?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
+        })
+        
+        // If no match by name, try by type
+        if (!matchedRoom) {
+          matchedRoom = allRoomsSnapshot.docs.find(doc => {
+            const data = doc.data()
+            return data.type?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
+          })
+        }
+        
+        // If still no match, try partial match
+        if (!matchedRoom) {
+          matchedRoom = allRoomsSnapshot.docs.find(doc => {
+            const data = doc.data()
+            const roomTypeLower = data.type?.trim().toLowerCase() || ""
+            const roomNameLower = data.name?.trim().toLowerCase() || ""
+            const searchLower = trimmedRoomType.toLowerCase()
+            return roomTypeLower.includes(searchLower) || roomNameLower.includes(searchLower) ||
+                   searchLower.includes(roomTypeLower) || searchLower.includes(roomNameLower)
+          })
+        }
+        
+        if (matchedRoom) {
+          const roomData = matchedRoom.data()
+          const price = Number(roomData.price) || 0
+          const discount = Number(roomData.discount) || 0
+          pricePerNight = discount > 0 ? price * (1 - discount / 100) : price
+          console.log(`✅ Price calculated during booking: ${pricePerNight} per night for "${trimmedRoomType}"`)
+        } else {
+          console.warn(`⚠️ Room not found for price calculation: "${trimmedRoomType}"`)
+        }
+      }
+    } catch (priceError) {
+      console.error("Error calculating price during booking:", priceError)
+      // Continue without price - will be calculated later during approval
+    }
+
     // OTP verified - save booking to Firestore
     const bookingData = {
       name: name.trim(),
@@ -225,6 +277,7 @@ export async function POST(request) {
       roomType: roomType.trim(),
       specialRequests: specialRequests ? specialRequests.trim() : "",
       status: "Pending", // Admin can approve later
+      pricePerNight: pricePerNight > 0 ? pricePerNight : null, // Store price if found
       createdAt: serverTimestamp(),
       verifiedAt: serverTimestamp(),
     }

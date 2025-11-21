@@ -11,7 +11,7 @@
 
 1. **Webhook URL**: 
    ```
-   https://resort-booking-livid.vercel.app/api/payment/paymongo-webhook
+   https://resort-booking-nu.vercel.app/api/payment/paymongo-webhook
    ```
 
 2. **Events to Listen**:
@@ -75,7 +75,7 @@ Make sure na mayroon ka ng lahat ng required environment variables:
 
 ## Webhook Endpoint Details
 
-**URL**: `https://resort-booking-livid.vercel.app/api/payment/paymongo-webhook`
+**URL**: `https://resort-booking-nu.vercel.app/api/payment/paymongo-webhook`
 **Method**: `POST`
 **Content-Type**: `application/json`
 
