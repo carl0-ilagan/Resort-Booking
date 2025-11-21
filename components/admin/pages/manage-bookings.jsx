@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { CheckCircle, X, Undo2, Eye, Loader2, ChevronLeft, ChevronRight, Download } from "lucide-react"
+import { CheckCircle, X, Undo2, Eye, Loader2, ChevronLeft, ChevronRight, Download, DollarSign } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination"
@@ -109,7 +109,62 @@ export default function ManageBookings() {
           toast.warning(`Booking approved, but email failed to send: ${emailData.error}`)
         } else {
           console.log("Email sent successfully")
-          toast.success(`Booking approved! Email sent to ${booking.email}`)
+          console.log("Payment link status:", {
+            paymentLinkCreated: emailData.paymentLinkCreated,
+            hasPaymentLink: !!emailData.paymentLink,
+            totalAmount: emailData.totalAmount,
+            pricePerNight: emailData.pricePerNight,
+            numberOfNights: emailData.numberOfNights,
+            debug: emailData.debug,
+            paymentError: emailData.paymentError
+          })
+          
+          if (emailData.paymentLinkCreated) {
+            toast.success(`Booking approved! Email sent to ${booking.email} with payment link.`)
+          } else {
+            console.warn("⚠️ Payment link was NOT created.")
+            console.warn("Debug info:", emailData.debug)
+            console.warn("Payment error details:", emailData.paymentError)
+            if (emailData.paymentError?.errors && emailData.paymentError.errors.length > 0) {
+              console.warn("PayMongo error messages:", emailData.paymentError.errors)
+            }
+            if (emailData.paymentError?.response) {
+              console.warn("Full PayMongo response:", emailData.paymentError.response)
+            }
+            
+            let errorMessage = "Payment link was not generated"
+            if (emailData.paymentError) {
+              if (emailData.paymentError.status === 401) {
+                const errorDetails = emailData.paymentError.errors?.join(", ") || emailData.paymentError.message || "Unauthorized"
+                
+                // Check for specific error messages
+                if (errorDetails.includes("activate your account")) {
+                  errorMessage = "PayMongo account not activated. Please activate your account in PayMongo Dashboard first."
+                } else {
+                  errorMessage = `Authentication failed (401): ${errorDetails}. Please verify your PAYMONGO_SECRET_KEY is correct and active.`
+                }
+                
+                console.error("🔴 PayMongo 401 Error Details:", {
+                  status: emailData.paymentError.status,
+                  errors: emailData.paymentError.errors,
+                  response: emailData.paymentError.response,
+                  secretKeyPrefix: emailData.debug?.secretKeyPrefix
+                })
+              } else if (emailData.paymentError.status === 400) {
+                errorMessage = `Bad request: ${emailData.paymentError.errors?.join(", ") || "Invalid parameters"}`
+              } else if (emailData.paymentError.message) {
+                errorMessage = emailData.paymentError.message
+              } else if (emailData.paymentError.errors && emailData.paymentError.errors.length > 0) {
+                errorMessage = `PayMongo error: ${emailData.paymentError.errors.join(", ")}`
+              }
+            } else if (!emailData.debug?.hasSecretKey) {
+              errorMessage = "PAYMONGO_SECRET_KEY not configured"
+            } else if (emailData.debug?.secretKeyFormat === "incorrect") {
+              errorMessage = "Secret key format incorrect (should start with 'sk_')"
+            }
+            
+            toast.warning(`Booking approved! Email sent, but payment link failed: ${errorMessage}`)
+          }
         }
       } catch (emailError) {
         console.error("Error sending email:", emailError)
@@ -185,6 +240,42 @@ export default function ManageBookings() {
     } catch (error) {
       console.error("Error declining booking:", error)
       toast.error(error.message || "Failed to decline booking")
+    } finally {
+      setProcessingId(null)
+    }
+  }
+
+  const handleMarkAsPaid = async (booking) => {
+    if (processingId) return
+    
+    if (!booking || !booking.id) {
+      toast.error("Invalid booking data")
+      return
+    }
+    
+    setProcessingId(booking.id)
+    
+    try {
+      console.log("Marking booking as paid:", booking.id)
+      
+      const response = await fetch("/api/booking/mark-as-paid", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bookingId: booking.id,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to mark booking as paid")
+      }
+
+      toast.success(`Booking marked as paid! Amount: ₱${data.paidAmount?.toFixed(2) || "0.00"}`)
+    } catch (error) {
+      console.error("Error marking booking as paid:", error)
+      toast.error(error.message || "Failed to mark booking as paid")
     } finally {
       setProcessingId(null)
     }
@@ -500,18 +591,34 @@ export default function ManageBookings() {
                     </>
                   )}
                   {booking.status?.trim() === "Approved" && (
-                    <button
-                      onClick={() => handleCancel(booking)}
-                      disabled={processingId === booking.id}
-                      className="p-2 bg-orange-100 text-orange-800 rounded-lg hover:bg-orange-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                      title="Cancel"
-                    >
-                      {processingId === booking.id ? (
-                        <Loader2 size={18} className="animate-spin" />
-                      ) : (
-                        <Undo2 size={18} />
+                    <>
+                      {booking.paymentStatus !== "paid" && (
+                        <button
+                          onClick={() => handleMarkAsPaid(booking)}
+                          disabled={processingId === booking.id}
+                          className="p-2 bg-blue-100 text-blue-800 rounded-lg hover:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                          title="Mark as Paid"
+                        >
+                          {processingId === booking.id ? (
+                            <Loader2 size={18} className="animate-spin" />
+                          ) : (
+                            <DollarSign size={18} />
+                          )}
+                        </button>
                       )}
-                    </button>
+                      <button
+                        onClick={() => handleCancel(booking)}
+                        disabled={processingId === booking.id}
+                        className="p-2 bg-orange-100 text-orange-800 rounded-lg hover:bg-orange-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                        title="Cancel"
+                      >
+                        {processingId === booking.id ? (
+                          <Loader2 size={18} className="animate-spin" />
+                        ) : (
+                          <Undo2 size={18} />
+                        )}
+                      </button>
+                    </>
                   )}
                   <button
                     onClick={() => setSelectedBooking(booking)}
@@ -596,18 +703,34 @@ export default function ManageBookings() {
                           </>
                         )}
                         {booking.status?.trim() === "Approved" && (
-                          <button
-                            onClick={() => handleCancel(booking)}
-                            disabled={processingId === booking.id}
-                            className="p-2 bg-orange-100 text-orange-800 rounded hover:bg-orange-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                            title="Cancel"
-                          >
-                            {processingId === booking.id ? (
-                              <Loader2 size={16} className="animate-spin" />
-                            ) : (
-                              <Undo2 size={16} />
+                          <>
+                            {booking.paymentStatus !== "paid" && (
+                              <button
+                                onClick={() => handleMarkAsPaid(booking)}
+                                disabled={processingId === booking.id}
+                                className="p-2 bg-blue-100 text-blue-800 rounded hover:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                                title="Mark as Paid"
+                              >
+                                {processingId === booking.id ? (
+                                  <Loader2 size={16} className="animate-spin" />
+                                ) : (
+                                  <DollarSign size={16} />
+                                )}
+                              </button>
                             )}
-                          </button>
+                            <button
+                              onClick={() => handleCancel(booking)}
+                              disabled={processingId === booking.id}
+                              className="p-2 bg-orange-100 text-orange-800 rounded hover:bg-orange-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                              title="Cancel"
+                            >
+                              {processingId === booking.id ? (
+                                <Loader2 size={16} className="animate-spin" />
+                              ) : (
+                                <Undo2 size={16} />
+                              )}
+                            </button>
+                          </>
                       )}
                         <button
                         onClick={() => setSelectedBooking(booking)}

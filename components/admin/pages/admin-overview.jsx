@@ -1,12 +1,13 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { Users, DoorOpen, BookOpen, DollarSign, MessageSquare, CheckCircle, TrendingUp } from "lucide-react"
+import { Users, DoorOpen, BookOpen, DollarSign, MessageSquare, CheckCircle, TrendingUp, RefreshCw } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { db } from "@/lib/firebase"
 import { collection, query, orderBy, onSnapshot } from "firebase/firestore"
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Line, LineChart, XAxis, YAxis, CartesianGrid, Legend } from "recharts"
+import { toast } from "sonner"
 
 export default function AdminOverview() {
   const [loading, setLoading] = useState(true)
@@ -15,6 +16,7 @@ export default function AdminOverview() {
   const [feedbacks, setFeedbacks] = useState([])
   const [revenueData, setRevenueData] = useState([])
   const [chartView, setChartView] = useState("day")
+  const [syncingPayments, setSyncingPayments] = useState(false)
 
   // Auto-complete bookings that are paid and past check-out date
   useEffect(() => {
@@ -200,20 +202,15 @@ export default function AdminOverview() {
           }
         })
 
-        // Separate bookings by payment status
+        // Separate bookings by payment status - only show paid bookings
         const paidBookings = bookings.filter(
           (booking) => booking.paymentStatus === "paid"
         )
 
-        const approvedBookings = bookings.filter(
-          (booking) => booking.status?.trim() === "Approved" && booking.paymentStatus !== "paid"
-        )
-
         // Calculate revenue per booking and group by date
         const actualRevenueByDate = new Map()
-        const estimatedRevenueByDate = new Map()
 
-        // Process paid bookings (actual revenue)
+        // Process paid bookings (actual revenue only)
         for (const booking of paidBookings) {
           const checkIn = booking.checkIn
           const checkOut = booking.checkOut
@@ -241,40 +238,11 @@ export default function AdminOverview() {
           actualRevenueByDate.set(dateKey, existing + totalAmount)
         }
 
-        // Process approved bookings (estimated revenue)
-        for (const booking of approvedBookings) {
-          const roomType = booking.roomType?.trim() || ""
-          const checkIn = booking.checkIn
-          const checkOut = booking.checkOut
-          const createdAt = booking.createdAt
-
-          if (!checkIn || !checkOut) continue
-
-          const pricePerNight = roomPriceMap.get(roomType.toLowerCase()) || 0
-          if (pricePerNight === 0) continue
-
-          const checkInDate = new Date(checkIn)
-          const checkOutDate = new Date(checkOut)
-          const nights = Math.ceil((checkOutDate - checkInDate) / (1000 * 60 * 60 * 24))
-          if (nights <= 0) continue
-
-          const totalAmount = pricePerNight * nights
-          const dateKey = createdAt.toISOString().split("T")[0]
-          const existing = estimatedRevenueByDate.get(dateKey) || 0
-          estimatedRevenueByDate.set(dateKey, existing + totalAmount)
-        }
-
-        // Combine and sort by date
-        const allDates = new Set([
-          ...Array.from(actualRevenueByDate.keys()),
-          ...Array.from(estimatedRevenueByDate.keys()),
-        ])
-
-        const revenueArray = Array.from(allDates)
-          .map((date) => ({
+        // Create revenue array with only actual revenue
+        const revenueArray = Array.from(actualRevenueByDate.entries())
+          .map(([date, revenue]) => ({
             date: new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-            actualRevenue: Math.round((actualRevenueByDate.get(date) || 0) * 100) / 100,
-            estimatedRevenue: Math.round((estimatedRevenueByDate.get(date) || 0) * 100) / 100,
+            actualRevenue: Math.round(revenue * 100) / 100,
             fullDate: date,
           }))
           .sort((a, b) => new Date(a.fullDate) - new Date(b.fullDate))
@@ -290,9 +258,8 @@ export default function AdminOverview() {
             weekStart.setDate(date.getDate() - date.getDay()) // Start of week (Sunday)
             const weekKey = weekStart.toISOString().split("T")[0]
             
-            const existing = weekMap.get(weekKey) || { actualRevenue: 0, estimatedRevenue: 0, fullDate: weekKey }
+            const existing = weekMap.get(weekKey) || { actualRevenue: 0, fullDate: weekKey }
             existing.actualRevenue += item.actualRevenue
-            existing.estimatedRevenue += item.estimatedRevenue
             weekMap.set(weekKey, existing)
           })
           
@@ -300,7 +267,6 @@ export default function AdminOverview() {
             .map(([date, data]) => ({
               date: new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
               actualRevenue: Math.round(data.actualRevenue * 100) / 100,
-              estimatedRevenue: Math.round(data.estimatedRevenue * 100) / 100,
               fullDate: date,
             }))
             .sort((a, b) => new Date(a.fullDate) - new Date(b.fullDate))
@@ -312,9 +278,8 @@ export default function AdminOverview() {
             const date = new Date(item.fullDate)
             const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`
             
-            const existing = monthMap.get(monthKey) || { actualRevenue: 0, estimatedRevenue: 0, fullDate: monthKey }
+            const existing = monthMap.get(monthKey) || { actualRevenue: 0, fullDate: monthKey }
             existing.actualRevenue += item.actualRevenue
-            existing.estimatedRevenue += item.estimatedRevenue
             monthMap.set(monthKey, existing)
           })
           
@@ -322,7 +287,6 @@ export default function AdminOverview() {
             .map(([date, data]) => ({
               date: new Date(date + "-01").toLocaleDateString("en-US", { month: "short", year: "numeric" }),
               actualRevenue: Math.round(data.actualRevenue * 100) / 100,
-              estimatedRevenue: Math.round(data.estimatedRevenue * 100) / 100,
               fullDate: date,
             }))
             .sort((a, b) => new Date(a.fullDate) - new Date(b.fullDate))
@@ -403,38 +367,12 @@ export default function AdminOverview() {
       }
     })
 
-    // Calculate estimated revenue (from approved but not paid bookings)
-    let estimatedRevenue = 0
-    const approvedBookings = bookings.filter(
-      (booking) => booking.status?.trim() === "Approved" && booking.paymentStatus !== "paid"
-    )
-
-    approvedBookings.forEach((booking) => {
-      const roomType = booking.roomType?.trim() || ""
-      const checkIn = booking.checkIn
-      const checkOut = booking.checkOut
-
-      if (!checkIn || !checkOut) return
-
-      const pricePerNight = roomPriceMap.get(roomType.toLowerCase()) || 0
-      if (pricePerNight === 0) return
-
-      const checkInDate = new Date(checkIn)
-      const checkOutDate = new Date(checkOut)
-      const nights = Math.ceil((checkOutDate - checkInDate) / (1000 * 60 * 60 * 24))
-      
-      if (nights > 0) {
-        estimatedRevenue += pricePerNight * nights
-      }
-    })
-
     const statsResult = {
       totalRooms: rooms.length,
       bookingsToday: bookingsToday.length,
       pendingApproval: pendingBookings.length,
       completed: completedBookings.length,
       actualRevenue: actualRevenue,
-      estimatedRevenue: estimatedRevenue,
       totalFeedback: feedbacks.length,
     }
 
@@ -444,11 +382,9 @@ export default function AdminOverview() {
       pendingApproval: statsResult.pendingApproval,
       completed: statsResult.completed,
       actualRevenue: statsResult.actualRevenue,
-      estimatedRevenue: statsResult.estimatedRevenue,
       totalFeedback: statsResult.totalFeedback,
       totalBookings: bookings.length,
       paidBookings: paidBookings.length,
-      approvedBookings: approvedBookings.length,
     })
 
     return statsResult
@@ -486,24 +422,13 @@ export default function AdminOverview() {
       color: "text-accent",
       key: "actualRevenue",
     },
-    {
-      label: "Estimated Revenue",
-      value: `₱${stats.estimatedRevenue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      icon: TrendingUp,
-      color: "text-purple-500",
-      key: "estimatedRevenue",
-    },
     { label: "Total Feedback", value: stats.totalFeedback.toString(), icon: MessageSquare, color: "text-orange-500", key: "feedback" },
   ]
 
   const chartConfig = {
     actualRevenue: {
-      label: "Actual Revenue",
+      label: "Revenue",
       color: "hsl(var(--chart-1))",
-    },
-    estimatedRevenue: {
-      label: "Estimated Revenue",
-      color: "hsl(var(--chart-2))",
     },
   }
 
@@ -547,7 +472,39 @@ export default function AdminOverview() {
       {/* Revenue Chart */}
       <div className="bg-card rounded-xl p-6 shadow-lg mb-8">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-4">
-          <h2 className="text-xl font-bold text-foreground">Revenue Trend</h2>
+          <div className="flex items-center gap-4">
+            <h2 className="text-xl font-bold text-foreground">Revenue Trend</h2>
+            <button
+              onClick={async () => {
+                setSyncingPayments(true)
+                try {
+                  const response = await fetch("/api/payment/sync-payments", {
+                    method: "POST",
+                  })
+                  const data = await response.json()
+                  if (response.ok) {
+                    if (data.synced > 0) {
+                      toast.success(`Successfully synced ${data.synced} payment(s)! Revenue will update automatically.`)
+                    } else {
+                      toast.info("No new payments to sync. All payments are already up to date.")
+                    }
+                  } else {
+                    toast.error(data.error || "Failed to sync payments")
+                  }
+                } catch (error) {
+                  toast.error(`Error: ${error.message}`)
+                } finally {
+                  setSyncingPayments(false)
+                }
+              }}
+              disabled={syncingPayments}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-100 text-blue-800 rounded-lg hover:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              title="Sync payments from PayMongo"
+            >
+              <RefreshCw size={16} className={syncingPayments ? "animate-spin" : ""} />
+              {syncingPayments ? "Syncing..." : "Sync Payments"}
+            </button>
+          </div>
           <div className="flex gap-2">
             <button
               onClick={() => setChartView("day")}
@@ -618,17 +575,7 @@ export default function AdminOverview() {
                   strokeWidth={2}
                   dot={false}
                   activeDot={{ r: 4 }}
-                  name="Actual Revenue"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="estimatedRevenue"
-                  stroke="var(--color-estimatedRevenue)"
-                  strokeWidth={2}
-                  strokeDasharray="5 5"
-                  dot={false}
-                  activeDot={{ r: 4 }}
-                  name="Estimated Revenue"
+                  name="Revenue"
                 />
               </LineChart>
             </ChartContainer>

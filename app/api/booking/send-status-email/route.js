@@ -273,6 +273,7 @@ export async function POST(request) {
     let numberOfNights = 0
     let paymentLink = null
     let displayRoomName = roomType || "N/A"
+    let paymentErrorDetails = null
 
     // Normalize roomType - trim and validate
     if (roomType) {
@@ -355,15 +356,52 @@ export async function POST(request) {
       // Create PayMongo payment link if amount is valid
       if (totalAmount > 0) {
         console.log("Creating PayMongo payment link...")
+        console.log("Payment details:", {
+          totalAmount,
+          pricePerNight,
+          numberOfNights,
+          bookingId,
+          displayRoomName,
+          roomType
+        })
+        
         try {
-          // Import the payment creation function directly instead of making HTTP call
-          const { createPaymongoLink } = await import("@/app/api/payment/create-paymongo-link/route")
-          
           // Create payment link using PayMongo API
           const paymongoSecretKey = process.env.PAYMONGO_SECRET_KEY
-          if (paymongoSecretKey) {
+          
+          // Check if secret key exists and has correct format
+          if (!paymongoSecretKey) {
+            console.error("❌ PAYMONGO_SECRET_KEY is not set in environment variables")
+            console.error("⚠️ Please add PAYMONGO_SECRET_KEY (starts with 'sk_') to your .env.local file")
+            paymentErrorDetails = {
+              message: "PAYMONGO_SECRET_KEY is not set"
+            }
+          } else if (!paymongoSecretKey.startsWith("sk_")) {
+            console.error("❌ PAYMONGO_SECRET_KEY format is incorrect")
+            console.error("⚠️ Secret key should start with 'sk_' (you might have added the public key instead)")
+            console.error("⚠️ Public keys start with 'pk_', Secret keys start with 'sk_'")
+            paymentErrorDetails = {
+              message: "PAYMONGO_SECRET_KEY format is incorrect (should start with 'sk_')"
+            }
+          } else {
+            console.log("✅ PayMongo secret key found (format looks correct)")
+            
             const amountInCentavos = Math.round(totalAmount * 100)
             const authString = Buffer.from(paymongoSecretKey + ":").toString("base64")
+            
+            const requestBody = {
+              data: {
+                attributes: {
+                  amount: amountInCentavos,
+                  currency: "PHP",
+                  description: `Booking Payment - ${displayRoomName || roomType || "Room"} (${checkIn} to ${checkOut})`,
+                  remarks: `Booking ID: ${bookingId}`,
+                },
+              },
+            }
+            
+            console.log("Sending request to PayMongo API...")
+            console.log("Request amount:", amountInCentavos, "centavos (₱" + totalAmount + ")")
             
             const paymongoResponse = await fetch("https://api.paymongo.com/v1/links", {
               method: "POST",
@@ -371,24 +409,20 @@ export async function POST(request) {
                 "Content-Type": "application/json",
                 Authorization: `Basic ${authString}`,
               },
-              body: JSON.stringify({
-                data: {
-                  attributes: {
-                    amount: amountInCentavos,
-                    currency: "PHP",
-                    description: `Booking Payment - ${displayRoomName || roomType || "Room"} (${checkIn} to ${checkOut})`,
-                    remarks: `Booking ID: ${bookingId}`,
-                  },
-                },
-              }),
+              body: JSON.stringify(requestBody),
             })
             
             const paymongoData = await paymongoResponse.json()
             
+            console.log("PayMongo API Response Status:", paymongoResponse.status, paymongoResponse.statusText)
+            console.log("PayMongo API Response:", JSON.stringify(paymongoData, null, 2))
+            
             if (paymongoResponse.ok && paymongoData.data?.attributes?.checkout_url) {
               paymentLink = paymongoData.data.attributes.checkout_url
               const paymentLinkId = paymongoData.data?.id
-              console.log("Payment link created:", paymentLink, "Link ID:", paymentLinkId)
+              console.log("✅ Payment link created successfully!")
+              console.log("Payment Link:", paymentLink)
+              console.log("Link ID:", paymentLinkId)
               
               // Store payment link ID in booking
               if (bookingId && paymentLinkId) {
@@ -399,29 +433,58 @@ export async function POST(request) {
                     paymentLinkId: paymentLinkId,
                     paymentLink: paymentLink,
                   })
-                  console.log(`Payment link ID stored for booking ${bookingId}`)
+                  console.log(`✅ Payment link ID stored for booking ${bookingId}`)
                 } catch (updateError) {
-                  console.error("Error storing payment link ID:", updateError)
+                  console.error("❌ Error storing payment link ID:", updateError)
                   // Continue even if storing fails
                 }
               }
             } else {
-              console.error("Failed to create payment link:", paymongoData.errors?.[0]?.detail || "Unknown error")
-              console.error("PayMongo response:", JSON.stringify(paymongoData, null, 2))
+              console.error("❌ Failed to create payment link")
+              const errors = []
+              if (paymongoData.errors && paymongoData.errors.length > 0) {
+                paymongoData.errors.forEach((error, index) => {
+                  const errorMsg = error.detail || error.message || JSON.stringify(error)
+                  errors.push(errorMsg)
+                  console.error(`Error ${index + 1}:`, errorMsg)
+                })
+              } else {
+                const unknownError = "Unknown error - PayMongo response: " + JSON.stringify(paymongoData, null, 2)
+                errors.push(unknownError)
+                console.error(unknownError)
+              }
+              
+              // Store error details for response
+              paymentErrorDetails = {
+                status: paymongoResponse.status,
+                statusText: paymongoResponse.statusText,
+                errors: errors,
+                response: paymongoData
+              }
+              
+              // Log helpful debugging info
+              if (paymongoResponse.status === 401) {
+                console.error("⚠️ Authentication failed - Check if PAYMONGO_SECRET_KEY is correct")
+                paymentErrorDetails.message = "Authentication failed - Check if PAYMONGO_SECRET_KEY is correct"
+              } else if (paymongoResponse.status === 400) {
+                console.error("⚠️ Bad request - Check if amount and other parameters are valid")
+                paymentErrorDetails.message = "Bad request - Check if amount and other parameters are valid"
+              }
             }
-          } else {
-            console.error("PayMongo secret key not configured")
           }
         } catch (paymentError) {
-          console.error("Error creating payment link:", paymentError)
-          console.error("Payment error details:", {
+          console.error("❌ Exception while creating payment link:", paymentError)
+          console.error("Error message:", paymentError.message)
+          console.error("Error stack:", paymentError.stack)
+          paymentErrorDetails = {
             message: paymentError.message,
             stack: paymentError.stack,
-          })
+            type: "exception"
+          }
           // Continue without payment link - booking is still approved
         }
       } else {
-        console.warn(`Cannot create payment link: totalAmount is ${totalAmount} (pricePerNight: ${pricePerNight}, nights: ${numberOfNights})`)
+        console.warn(`⚠️ Cannot create payment link: totalAmount is ${totalAmount} (pricePerNight: ${pricePerNight}, nights: ${numberOfNights})`)
       }
     } else {
       console.warn("Cannot create payment link: missing required fields", {
@@ -583,9 +646,21 @@ export async function POST(request) {
     const info = await transporter.sendMail(mailOptions)
     console.log("Status email sent:", info.messageId)
 
+    // Return response with payment link status for debugging
     return NextResponse.json({
       success: true,
       message: "Email sent successfully",
+      paymentLinkCreated: !!paymentLink,
+      paymentLink: paymentLink || null,
+      totalAmount: totalAmount,
+      pricePerNight: pricePerNight,
+      numberOfNights: numberOfNights,
+      paymentError: paymentErrorDetails,
+      debug: {
+        hasSecretKey: !!process.env.PAYMONGO_SECRET_KEY,
+        secretKeyFormat: process.env.PAYMONGO_SECRET_KEY ? (process.env.PAYMONGO_SECRET_KEY.startsWith("sk_") ? "correct" : "incorrect") : "missing",
+        secretKeyPrefix: process.env.PAYMONGO_SECRET_KEY ? process.env.PAYMONGO_SECRET_KEY.substring(0, 10) + "..." : "not set",
+      }
     })
   } catch (error) {
     console.error("Error sending status email:", error)

@@ -131,9 +131,59 @@ export async function POST(request) {
         }
       }
 
+      // Additional fallback: try to find by description/room name and dates
       if (!bookingId) {
-        console.error("Booking ID not found. Payment link ID:", paymentLinkId, "Amount:", amountInPesos)
-        return NextResponse.json({ error: "Booking ID not found" }, { status: 400 })
+        try {
+          const description = paymentAttributes.description || ""
+          // Extract room name and dates from description like "Booking Payment - Ocean View Family Room (2025-11-22 to 2025-11-23)"
+          const descMatch = description.match(/Booking Payment\s*-\s*(.+?)\s*\((\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})\)/i)
+          if (descMatch) {
+            const roomName = descMatch[1].trim()
+            const checkIn = descMatch[2]
+            const checkOut = descMatch[3]
+            
+            console.log(`Trying to find booking by description: room="${roomName}", checkIn="${checkIn}", checkOut="${checkOut}"`)
+            
+            // Try to find booking by room name and dates
+            const bookingsRef = collection(db, "guestbooking")
+            const allBookingsSnapshot = await getDocs(bookingsRef)
+            
+            const matchingBooking = allBookingsSnapshot.docs.find(doc => {
+              const data = doc.data()
+              const bookingRoomType = (data.roomType || "").trim()
+              const bookingCheckIn = data.checkIn || ""
+              const bookingCheckOut = data.checkOut || ""
+              
+              // Match room name (case-insensitive, partial match)
+              const roomMatch = bookingRoomType.toLowerCase().includes(roomName.toLowerCase()) || 
+                               roomName.toLowerCase().includes(bookingRoomType.toLowerCase())
+              
+              // Match dates
+              const dateMatch = bookingCheckIn === checkIn && bookingCheckOut === checkOut
+              
+              return roomMatch && dateMatch && data.status?.trim() === "Approved" && data.paymentStatus !== "paid"
+            })
+            
+            if (matchingBooking) {
+              bookingId = matchingBooking.id
+              console.log(`✅ Found booking ${bookingId} by description matching`)
+            }
+          }
+        } catch (fallbackError) {
+          console.error("Error in fallback booking search:", fallbackError)
+        }
+      }
+
+      if (!bookingId) {
+        console.error("❌ Booking ID not found. Payment link ID:", paymentLinkId, "Amount:", amountInPesos)
+        console.error("Payment description:", paymentAttributes.description)
+        console.error("Payment remarks:", paymentAttributes.remarks)
+        // Don't return error - just log it so webhook doesn't fail
+        return NextResponse.json({ 
+          message: "Payment received but booking not found. Please sync manually.",
+          paymentLinkId: paymentLinkId,
+          amount: amountInPesos
+        })
       }
 
       // Update booking in Firestore
@@ -151,6 +201,7 @@ export async function POST(request) {
           paymentLinkId: paymentLinkId,
           paidAmount: amountInPesos,
           paidAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         }
 
         // Check if booking check-out date has passed, auto-complete if so
