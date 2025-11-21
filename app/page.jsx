@@ -56,6 +56,11 @@ function RoomCard({ room, onViewDetails, onImageClick }) {
 
   const handleBookNow = (e) => {
     e.stopPropagation()
+    // Don't proceed if room is not available
+    const availability = room.availability?.trim() || room.availability
+    if (availability && availability !== "Available") {
+      return
+    }
     // Pre-fill the room type in booking form
     if (typeof window !== 'undefined') {
     window.dispatchEvent(
@@ -66,6 +71,10 @@ function RoomCard({ room, onViewDetails, onImageClick }) {
     }
     document.getElementById("booking")?.scrollIntoView({ behavior: "smooth" })
   }
+
+  // Check if room is available for booking
+  const availability = room.availability?.trim() || room.availability
+  const isAvailable = !availability || availability === "Available"
 
   return (
     <div className="group bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 border border-emerald-50">
@@ -182,9 +191,15 @@ function RoomCard({ room, onViewDetails, onImageClick }) {
           </button>
           <button
             onClick={handleBookNow}
-            className="flex-1 bg-gradient-to-r from-emerald-600 to-emerald-700 text-white py-2.5 rounded-lg hover:from-emerald-700 hover:to-emerald-800 transition-all duration-200 font-semibold text-sm shadow-md hover:shadow-lg transform hover:scale-105"
+            disabled={!isAvailable}
+            className={`flex-1 py-2.5 rounded-lg transition-all duration-200 font-semibold text-sm ${
+              isAvailable
+                ? "bg-gradient-to-r from-emerald-600 to-emerald-700 text-white hover:from-emerald-700 hover:to-emerald-800 shadow-md hover:shadow-lg transform hover:scale-105 cursor-pointer"
+                : "bg-gray-300 text-gray-500 cursor-not-allowed opacity-60"
+            }`}
+            title={!isAvailable ? `Room is currently ${availability?.toLowerCase() || "unavailable"}. Only available rooms can be booked.` : ""}
           >
-            Book Now
+            {isAvailable ? "Book Now" : availability === "Maintenance" ? "Under Maintenance" : "Unavailable"}
           </button>
         </div>
       </div>
@@ -264,9 +279,13 @@ export default function Home() {
             ...doc.data(),
           }))
           .filter((room) => {
-            // Show all rooms except those explicitly marked as Unavailable
-            // If availability field doesn't exist, show the room
-            return room.availability !== "Unavailable"
+            // Only show rooms that are marked as "Available"
+            // If availability field doesn't exist, show the room (for backward compatibility)
+            // Filter out "Maintenance" and "Unavailable" rooms
+            if (!room.availability) {
+              return true // Show room if availability field doesn't exist
+            }
+            return room.availability === "Available"
           })
           // Sort by createdAt if available, otherwise keep original order
           .sort((a, b) => {
@@ -1165,15 +1184,46 @@ export default function Home() {
                         <div className="flex flex-col sm:flex-row gap-2 lg:gap-3">
                   <button
                             onClick={() => {
+                              // Don't proceed if room is not available
+                              const roomAvailability = room.availability?.trim() || room.availability
+                              if (roomAvailability && roomAvailability !== "Available") {
+                                return
+                              }
                               setFormData((prev) => ({ ...prev, roomType: room.name }))
                               handleModalClose()
                               setTimeout(() => {
                                 document.getElementById("booking")?.scrollIntoView({ behavior: "smooth" })
                               }, 350)
                             }}
-                            className="flex-1 rounded-xl bg-emerald-600 px-4 py-2.5 lg:px-6 lg:py-3 font-semibold text-white text-sm lg:text-base transition hover:bg-emerald-700"
+                            disabled={(() => {
+                              const roomAvailability = room.availability?.trim() || room.availability
+                              return roomAvailability && roomAvailability !== "Available"
+                            })()}
+                            className={`flex-1 rounded-xl px-4 py-2.5 lg:px-6 lg:py-3 font-semibold text-sm lg:text-base transition ${
+                              (() => {
+                                const roomAvailability = room.availability?.trim() || room.availability
+                                const isAvailable = !roomAvailability || roomAvailability === "Available"
+                                return isAvailable
+                                  ? "bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer"
+                                  : "bg-gray-300 text-gray-500 cursor-not-allowed opacity-60"
+                              })()
+                            }`}
+                            title={(() => {
+                              const roomAvailability = room.availability?.trim() || room.availability
+                              if (roomAvailability && roomAvailability !== "Available") {
+                                return `Room is currently ${roomAvailability.toLowerCase()}. Only available rooms can be booked.`
+                              }
+                              return ""
+                            })()}
                           >
-                            Book Now
+                            {(() => {
+                              const roomAvailability = room.availability?.trim() || room.availability
+                              const isAvailable = !roomAvailability || roomAvailability === "Available"
+                              if (!isAvailable) {
+                                return roomAvailability === "Maintenance" ? "Under Maintenance" : "Unavailable"
+                              }
+                              return "Book Now"
+                            })()}
                           </button>
                   <button
                             onClick={handleModalClose}
