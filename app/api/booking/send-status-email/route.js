@@ -181,20 +181,45 @@ export async function POST(request) {
         const bookingDoc = await getDoc(bookingRef)
         if (bookingDoc.exists()) {
           const bookingData = bookingDoc.data()
-          // Use booking document as source of truth
-          roomType = bookingData.roomType?.trim() || roomType || ""
+          // Use booking document as source of truth - prioritize booking document data
+          const fetchedRoomType = bookingData.roomType?.trim() || ""
+          roomType = fetchedRoomType || roomType || ""
           checkIn = bookingData.checkIn || checkIn
           checkOut = bookingData.checkOut || checkOut
           email = bookingData.email || email
           name = bookingData.name || name
-          console.log("✅ Fetched booking data from Firestore:", { roomType, checkIn, checkOut, email, name })
+          
+          console.log("✅ Fetched booking data from Firestore:", { 
+            bookingId,
+            roomType: roomType || "EMPTY", 
+            checkIn, 
+            checkOut, 
+            email, 
+            name,
+            allBookingFields: Object.keys(bookingData)
+          })
+          
+          // Log the full booking data for debugging
+          console.log("📋 Full booking document:", JSON.stringify(bookingData, null, 2))
+          
+          // If roomType is still empty, log warning
+          if (!roomType || roomType === "" || roomType === "WALA") {
+            console.error("⚠️ WARNING: roomType is empty or 'WALA' in booking document:", bookingId)
+            console.error("This will prevent price calculation and payment link generation!")
+          }
         } else {
           console.warn("⚠️ Booking document not found:", bookingId)
         }
       } catch (fetchError) {
         console.error("❌ Error fetching booking document:", fetchError)
+        console.error("Error details:", {
+          message: fetchError.message,
+          stack: fetchError.stack,
+        })
         // Continue with provided data if fetch fails
       }
+    } else {
+      console.warn("⚠️ No bookingId provided - cannot fetch booking document from Firestore")
     }
 
     // Check if email credentials are configured
@@ -243,20 +268,42 @@ export async function POST(request) {
       console.log(`Calculated nights: ${numberOfNights} (checkIn: ${checkIn}, checkOut: ${checkOut})`)
     }
 
-    // Calculate price and create payment link if we have valid room type
-    if (status === "Approved" && roomType && roomType !== "" && checkIn && checkOut) {
-      console.log(`Calculating payment: roomType="${roomType}", checkIn="${checkIn}", checkOut="${checkOut}", nights=${numberOfNights}`)
+    // Calculate price and create payment link if we have valid room type OR if we have bookingId (try to get price from booking)
+    let pricePerNight = 0
+    
+    if (status === "Approved" && checkIn && checkOut && numberOfNights > 0) {
+      // Try to get price from booking document first (if stored during booking creation)
+      if (bookingId) {
+        try {
+          const { doc, getDoc } = await import("firebase/firestore")
+          const bookingRef = doc(db, "guestbooking", bookingId)
+          const bookingDoc = await getDoc(bookingRef)
+          if (bookingDoc.exists()) {
+            const bookingData = bookingDoc.data()
+            // Check if price was stored in booking
+            if (bookingData.pricePerNight || bookingData.totalPrice) {
+              pricePerNight = Number(bookingData.pricePerNight) || (Number(bookingData.totalPrice) / numberOfNights)
+              console.log(`✅ Found price in booking document: ${pricePerNight} per night`)
+            }
+          }
+        } catch (error) {
+          console.error("Error fetching price from booking:", error)
+        }
+      }
       
-      // Fetch room price from Firestore
-      const pricePerNight = await getRoomPrice(roomType)
-      console.log(`Price per night: ${pricePerNight}`)
+      // If no price in booking, try to get from room lookup
+      if (pricePerNight === 0 && roomType && roomType !== "") {
+        console.log(`Calculating payment: roomType="${roomType}", checkIn="${checkIn}", checkOut="${checkOut}", nights=${numberOfNights}`)
+        pricePerNight = await getRoomPrice(roomType)
+        console.log(`Price per night from room lookup: ${pricePerNight}`)
+      }
       
       // Calculate total amount
       if (pricePerNight > 0 && numberOfNights > 0) {
         totalAmount = pricePerNight * numberOfNights
         console.log(`Total amount calculated: ${totalAmount} (${pricePerNight} × ${numberOfNights})`)
       } else {
-        console.warn(`Cannot calculate total: pricePerNight=${pricePerNight}, numberOfNights=${numberOfNights}`)
+        console.warn(`Cannot calculate total: pricePerNight=${pricePerNight}, numberOfNights=${numberOfNights}, roomType="${roomType || 'EMPTY'}"`)
       }
       
       // Create PayMongo payment link if amount is valid
