@@ -1,14 +1,15 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { Mail, Eye, CheckCircle, XCircle, Loader2 } from "lucide-react"
+import { Mail, Eye, CheckCircle, XCircle, Loader2, Trash2, AlertTriangle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { db } from "@/lib/firebase"
-import { collection, query, orderBy, onSnapshot, doc, updateDoc } from "firebase/firestore"
+import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc } from "firebase/firestore"
 import { toast } from "sonner"
 import { useIsMobile } from "@/hooks/use-mobile"
 
@@ -16,6 +17,7 @@ export default function ManageContact() {
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedMessage, setSelectedMessage] = useState(null)
+  const [deleteMessage, setDeleteMessage] = useState(null)
   const [processingId, setProcessingId] = useState(null)
   const [sortBy, setSortBy] = useState("all")
   const [currentPage, setCurrentPage] = useState(1)
@@ -62,6 +64,29 @@ export default function ManageContact() {
     } catch (error) {
       console.error("Error updating message status:", error)
       toast.error("Failed to update message status")
+    } finally {
+      setProcessingId(null)
+    }
+  }
+
+  const handleDeleteClick = (message) => {
+    setDeleteMessage(message)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteMessage || processingId) return
+    
+    setProcessingId(deleteMessage.id)
+    
+    try {
+      const messageRef = doc(db, "contactMessages", deleteMessage.id)
+      await deleteDoc(messageRef)
+      
+      toast.success("Message deleted successfully")
+      setDeleteMessage(null)
+    } catch (error) {
+      console.error("Error deleting message:", error)
+      toast.error("Failed to delete message")
     } finally {
       setProcessingId(null)
     }
@@ -155,28 +180,28 @@ export default function ManageContact() {
 
   // Skeleton loading component
   const SkeletonRow = () => (
-    <tr className="border-b border-border">
-      <td className="py-4 px-6"><Skeleton className="h-4 w-32" /></td>
-      <td className="py-4 px-6"><Skeleton className="h-4 w-40" /></td>
-      <td className="py-4 px-6"><Skeleton className="h-4 w-48" /></td>
-      <td className="py-4 px-6"><Skeleton className="h-4 w-28" /></td>
-      <td className="py-4 px-6"><Skeleton className="h-6 w-20 rounded-full" /></td>
-      <td className="py-4 px-6"><Skeleton className="h-8 w-20" /></td>
+    <tr className="border-b border-border dark:border-slate-700">
+      <td className="py-4 px-6"><Skeleton className="h-4 w-32 dark:bg-slate-700" /></td>
+      <td className="py-4 px-6"><Skeleton className="h-4 w-40 dark:bg-slate-700" /></td>
+      <td className="py-4 px-6"><Skeleton className="h-4 w-48 dark:bg-slate-700" /></td>
+      <td className="py-4 px-6"><Skeleton className="h-4 w-28 dark:bg-slate-700" /></td>
+      <td className="py-4 px-6"><Skeleton className="h-6 w-20 rounded-full dark:bg-slate-700" /></td>
+      <td className="py-4 px-6"><Skeleton className="h-8 w-20 dark:bg-slate-700" /></td>
     </tr>
   )
 
   const MobileSkeletonCard = () => (
-    <div className="bg-card rounded-xl shadow-lg p-4 border border-border">
+    <div className="bg-card dark:bg-slate-800 rounded-xl shadow-lg p-4 border border-border dark:border-slate-700">
       <div className="flex items-center gap-4">
         <div className="flex-1 min-w-0 space-y-2">
-          <Skeleton className="h-4 w-32" />
-          <Skeleton className="h-3 w-40" />
-          <Skeleton className="h-3 w-48" />
-          <Skeleton className="h-5 w-16 rounded-full" />
+          <Skeleton className="h-4 w-32 dark:bg-slate-700" />
+          <Skeleton className="h-3 w-40 dark:bg-slate-700" />
+          <Skeleton className="h-3 w-48 dark:bg-slate-700" />
+          <Skeleton className="h-5 w-16 rounded-full dark:bg-slate-700" />
         </div>
         <div className="flex gap-2 shrink-0">
-          <Skeleton className="h-10 w-10 rounded-lg" />
-          <Skeleton className="h-10 w-10 rounded-lg" />
+          <Skeleton className="h-10 w-10 rounded-lg dark:bg-slate-700" />
+          <Skeleton className="h-10 w-10 rounded-lg dark:bg-slate-700" />
         </div>
       </div>
     </div>
@@ -185,9 +210,9 @@ export default function ManageContact() {
   return (
     <div>
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-        <h1 className="text-3xl font-bold text-foreground">Contact Messages</h1>
+        <h1 className="text-3xl font-bold text-foreground dark:text-white">Contact Messages</h1>
         <div className="flex items-center gap-3">
-          <label className="text-sm text-muted-foreground whitespace-nowrap">Sort by:</label>
+          <label className="text-sm text-muted-foreground dark:text-gray-400 whitespace-nowrap">Sort by:</label>
           <Select value={sortBy} onValueChange={setSortBy}>
             <SelectTrigger className="w-[180px]">
               <SelectValue placeholder="All Messages" />
@@ -203,9 +228,9 @@ export default function ManageContact() {
       </div>
 
       {sortedAndFilteredMessages.length === 0 ? (
-        <div className="bg-card rounded-xl shadow-lg p-8 text-center">
-          <Mail className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-          <p className="text-muted-foreground">No contact messages found.</p>
+        <div className="bg-card dark:bg-slate-800 rounded-xl shadow-lg p-8 text-center">
+          <Mail className="h-16 w-16 text-muted-foreground dark:text-gray-500 mx-auto mb-4" />
+          <p className="text-muted-foreground dark:text-gray-400">No contact messages found.</p>
         </div>
       ) : isMobile ? (
         // Mobile View: Card layout, no scroll bar
@@ -216,20 +241,20 @@ export default function ManageContact() {
             paginatedMessages.map((message) => (
               <div
                 key={message.id}
-                className={`bg-card rounded-xl shadow-lg p-4 border border-border hover:shadow-xl transition-shadow ${
-                  message.status === "Unread" ? "bg-yellow-50/50" : ""
+                className={`bg-card dark:bg-slate-800 rounded-xl shadow-lg p-4 border border-border dark:border-slate-700 hover:shadow-xl transition-shadow ${
+                  message.status === "Unread" ? "bg-yellow-50/50 dark:bg-yellow-900/20" : ""
                 }`}
               >
                 <div className="flex items-center gap-4">
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-foreground truncate">{message.name}</h3>
-                    <p className="text-xs text-muted-foreground truncate">{message.email}</p>
-                    <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{message.message}</p>
+                    <h3 className="font-semibold text-foreground dark:text-white truncate">{message.name}</h3>
+                    <p className="text-xs text-muted-foreground dark:text-gray-400 truncate">{message.email}</p>
+                    <p className="text-sm text-muted-foreground dark:text-gray-300 mt-1 line-clamp-2">{message.message}</p>
                     <div className="flex items-center gap-2 mt-2">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${getStatusColor(message.status)}`}>
                         {message.status || "Unread"}
                       </span>
-                      <span className="text-xs text-muted-foreground">{formatDate(message.createdAt)}</span>
+                      <span className="text-xs text-muted-foreground dark:text-gray-400">{formatDate(message.createdAt)}</span>
                     </div>
                   </div>
                   <div className="flex flex-col gap-2 shrink-0">
@@ -238,8 +263,8 @@ export default function ManageContact() {
                       disabled={processingId === message.id}
                       className={`p-2 rounded-lg hover:opacity-80 transition disabled:opacity-50 disabled:cursor-not-allowed ${
                         message.status === "Read"
-                          ? "bg-yellow-100 text-yellow-800"
-                          : "bg-blue-100 text-blue-800"
+                          ? "bg-yellow-100 dark:bg-yellow-900/50 text-yellow-800 dark:text-yellow-300"
+                          : "bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-300"
                       }`}
                       title={message.status === "Read" ? "Mark as Unread" : "Mark as Read"}
                     >
@@ -253,10 +278,22 @@ export default function ManageContact() {
                     </button>
                     <button
                       onClick={() => setSelectedMessage(message)}
-                      className="p-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition"
+                      className="p-2 bg-secondary dark:bg-slate-700 text-secondary-foreground dark:text-white rounded-lg hover:bg-secondary/80 dark:hover:bg-slate-600 transition"
                       title="View Details"
                     >
                       <Eye size={18} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteClick(message)}
+                      disabled={processingId === message.id}
+                      className="p-2 bg-red-100 dark:bg-red-900/50 text-red-800 dark:text-red-300 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/70 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Delete Message"
+                    >
+                      {processingId === message.id ? (
+                        <Loader2 size={18} className="animate-spin" />
+                      ) : (
+                        <Trash2 size={18} />
+                      )}
                     </button>
                   </div>
                 </div>
@@ -266,17 +303,17 @@ export default function ManageContact() {
         </div>
       ) : (
         // Desktop View: Table
-        <div className="bg-card rounded-xl shadow-lg overflow-hidden">
+        <div className="bg-card dark:bg-slate-800 rounded-xl shadow-lg overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-secondary/30 border-b border-border">
+              <thead className="bg-secondary/30 dark:bg-slate-700/50 border-b border-border dark:border-slate-600">
                 <tr>
-                  <th className="text-left py-4 px-6 font-semibold text-foreground">Name</th>
-                  <th className="text-left py-4 px-6 font-semibold text-foreground">Email</th>
-                  <th className="text-left py-4 px-6 font-semibold text-foreground">Message Preview</th>
-                  <th className="text-left py-4 px-6 font-semibold text-foreground">Date</th>
-                  <th className="text-left py-4 px-6 font-semibold text-foreground">Status</th>
-                  <th className="text-left py-4 px-6 font-semibold text-foreground">Actions</th>
+                  <th className="text-left py-4 px-6 font-semibold text-foreground dark:text-white">Name</th>
+                  <th className="text-left py-4 px-6 font-semibold text-foreground dark:text-white">Email</th>
+                  <th className="text-left py-4 px-6 font-semibold text-foreground dark:text-white">Message Preview</th>
+                  <th className="text-left py-4 px-6 font-semibold text-foreground dark:text-white">Date</th>
+                  <th className="text-left py-4 px-6 font-semibold text-foreground dark:text-white">Status</th>
+                  <th className="text-left py-4 px-6 font-semibold text-foreground dark:text-white">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -286,16 +323,16 @@ export default function ManageContact() {
                   paginatedMessages.map((message) => (
                   <tr
                     key={message.id}
-                    className={`border-b border-border hover:bg-secondary/10 ${
-                      message.status === "Unread" ? "bg-yellow-50/50" : ""
+                    className={`border-b border-border dark:border-slate-700 hover:bg-secondary/10 dark:hover:bg-slate-700/30 ${
+                      message.status === "Unread" ? "bg-yellow-50/50 dark:bg-yellow-900/20" : "dark:bg-slate-800/50"
                     }`}
                   >
-                    <td className="py-4 px-6 text-foreground font-semibold">{message.name}</td>
-                    <td className="py-4 px-6 text-foreground text-xs">{message.email}</td>
-                    <td className="py-4 px-6 text-muted-foreground">
+                    <td className="py-4 px-6 text-foreground dark:text-white font-semibold">{message.name}</td>
+                    <td className="py-4 px-6 text-foreground dark:text-gray-300 text-xs">{message.email}</td>
+                    <td className="py-4 px-6 text-muted-foreground dark:text-gray-300">
                       <div className="max-w-xs truncate">{message.message}</div>
                     </td>
-                    <td className="py-4 px-6 text-muted-foreground text-xs">
+                    <td className="py-4 px-6 text-muted-foreground dark:text-gray-400 text-xs">
                       {formatDate(message.createdAt)}
                     </td>
                     <td className="py-4 px-6">
@@ -314,8 +351,8 @@ export default function ManageContact() {
                           disabled={processingId === message.id}
                           className={`p-2 rounded hover:opacity-80 transition disabled:opacity-50 disabled:cursor-not-allowed ${
                             message.status === "Read"
-                              ? "bg-yellow-100 text-yellow-800"
-                              : "bg-blue-100 text-blue-800"
+                              ? "bg-yellow-100 dark:bg-yellow-900/50 text-yellow-800 dark:text-yellow-300"
+                              : "bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-300"
                           }`}
                           title={message.status === "Read" ? "Mark as Unread" : "Mark as Read"}
                         >
@@ -329,10 +366,22 @@ export default function ManageContact() {
                         </button>
                         <button
                           onClick={() => setSelectedMessage(message)}
-                          className="p-2 bg-secondary text-secondary-foreground rounded hover:bg-secondary/80 transition"
+                          className="p-2 bg-secondary dark:bg-slate-700 text-secondary-foreground dark:text-white rounded hover:bg-secondary/80 dark:hover:bg-slate-600 transition"
                           title="View Details"
                         >
                           <Eye size={16} />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteClick(message)}
+                          disabled={processingId === message.id}
+                          className="p-2 bg-red-100 dark:bg-red-900/50 text-red-800 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-900/70 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Delete Message"
+                        >
+                          {processingId === message.id ? (
+                            <Loader2 size={16} className="animate-spin" />
+                          ) : (
+                            <Trash2 size={16} />
+                          )}
                         </button>
                       </div>
                     </td>
@@ -408,17 +457,17 @@ export default function ManageContact() {
 
       {/* Show pagination info */}
       {sortedAndFilteredMessages.length > 0 && (
-        <div className="mt-4 text-center text-sm text-muted-foreground">
+        <div className="mt-4 text-center text-sm text-muted-foreground dark:text-gray-400">
           Showing {startIndex + 1} to {Math.min(endIndex, sortedAndFilteredMessages.length)} of {sortedAndFilteredMessages.length} messages
         </div>
       )}
 
       <Dialog open={!!selectedMessage} onOpenChange={(open) => !open && setSelectedMessage(null)}>
-        <DialogContent className={`${isMobile ? 'max-w-[90%] w-[90%] max-h-[85vh] p-4' : 'max-w-2xl max-h-[90vh] p-6'} overflow-y-auto`}>
+        <DialogContent className={`${isMobile ? 'max-w-[90%] w-[90%] max-h-[85vh] p-4' : 'max-w-2xl max-h-[90vh] p-6'} overflow-y-auto dark:bg-slate-800 dark:border-slate-700`}>
           <DialogHeader className={isMobile ? 'pb-2' : ''}>
-            <DialogTitle className={`${isMobile ? 'text-lg' : 'text-2xl'} font-bold text-foreground`}>Message Details</DialogTitle>
+            <DialogTitle className={`${isMobile ? 'text-lg' : 'text-2xl'} font-bold text-foreground dark:text-white`}>Message Details</DialogTitle>
             {!isMobile && (
-              <DialogDescription className="text-muted-foreground">
+              <DialogDescription className="text-muted-foreground dark:text-gray-400">
                 View and manage contact message details
               </DialogDescription>
             )}
@@ -427,20 +476,20 @@ export default function ManageContact() {
             <div className={`space-y-3 ${isMobile ? 'mt-1' : 'mt-4'}`}>
               <div className={`grid ${isMobile ? 'grid-cols-1 gap-2' : 'grid-cols-2 gap-4'}`}>
                 <div>
-                  <p className={`text-muted-foreground mb-1 ${isMobile ? 'text-[10px]' : 'text-xs'}`}>Name</p>
-                  <p className={`font-semibold text-foreground ${isMobile ? 'text-xs' : ''}`}>{selectedMessage.name}</p>
+                  <p className={`text-muted-foreground dark:text-gray-400 mb-1 ${isMobile ? 'text-[10px]' : 'text-xs'}`}>Name</p>
+                  <p className={`font-semibold text-foreground dark:text-white ${isMobile ? 'text-xs' : ''}`}>{selectedMessage.name}</p>
                 </div>
                 <div>
-                  <p className={`text-muted-foreground mb-1 ${isMobile ? 'text-[10px]' : 'text-xs'}`}>Email</p>
-                  <p className={`font-semibold text-foreground ${isMobile ? 'text-[10px]' : 'text-sm'} break-all`}>{selectedMessage.email}</p>
+                  <p className={`text-muted-foreground dark:text-gray-400 mb-1 ${isMobile ? 'text-[10px]' : 'text-xs'}`}>Email</p>
+                  <p className={`font-semibold text-foreground dark:text-white ${isMobile ? 'text-[10px]' : 'text-sm'} break-all`}>{selectedMessage.email}</p>
                 </div>
               </div>
               <div>
-                <p className={`text-muted-foreground mb-1 ${isMobile ? 'text-[10px]' : 'text-xs'}`}>Date</p>
-                <p className={`font-semibold text-foreground ${isMobile ? 'text-xs' : ''}`}>{formatDate(selectedMessage.createdAt)}</p>
+                <p className={`text-muted-foreground dark:text-gray-400 mb-1 ${isMobile ? 'text-[10px]' : 'text-xs'}`}>Date</p>
+                <p className={`font-semibold text-foreground dark:text-white ${isMobile ? 'text-xs' : ''}`}>{formatDate(selectedMessage.createdAt)}</p>
               </div>
               <div>
-                <p className={`text-muted-foreground mb-1 ${isMobile ? 'text-[10px]' : 'text-xs'}`}>Status</p>
+                <p className={`text-muted-foreground dark:text-gray-400 mb-1 ${isMobile ? 'text-[10px]' : 'text-xs'}`}>Status</p>
                 <span
                   className={`px-2 py-0.5 rounded-full ${isMobile ? 'text-[10px]' : 'text-xs'} font-semibold inline-block ${getStatusColor(
                     selectedMessage.status
@@ -450,8 +499,8 @@ export default function ManageContact() {
                 </span>
               </div>
               <div>
-                <p className={`text-muted-foreground mb-1 ${isMobile ? 'text-[10px]' : 'text-xs'}`}>Message</p>
-                <div className={`bg-secondary/30 rounded-lg ${isMobile ? 'p-2 text-xs' : 'p-4'} text-foreground whitespace-pre-wrap`}>
+                <p className={`text-muted-foreground dark:text-gray-400 mb-1 ${isMobile ? 'text-[10px]' : 'text-xs'}`}>Message</p>
+                <div className={`bg-secondary/30 dark:bg-slate-700/50 rounded-lg ${isMobile ? 'p-2 text-xs' : 'p-4'} text-foreground dark:text-gray-200 whitespace-pre-wrap`}>
                   {selectedMessage.message}
                 </div>
               </div>
@@ -474,6 +523,42 @@ export default function ManageContact() {
           )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteMessage} onOpenChange={(open) => !open && setDeleteMessage(null)}>
+        <AlertDialogContent className={`${isMobile ? 'max-w-[90%] w-[90%]' : 'max-w-md'}`}>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-red-500" />
+              Delete Message
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this message from <strong>{deleteMessage?.name}</strong>? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className={isMobile ? 'flex-col gap-2' : ''}>
+            <AlertDialogCancel
+              onClick={() => setDeleteMessage(null)}
+              className={isMobile ? 'w-full' : ''}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteConfirm}
+              disabled={processingId === deleteMessage?.id}
+              className={`bg-red-600 hover:bg-red-700 text-white ${isMobile ? 'w-full' : ''}`}
+            >
+              {processingId === deleteMessage?.id ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 size={16} className="animate-spin" />
+                  Deleting...
+                </span>
+              ) : (
+                "Delete"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
