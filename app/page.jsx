@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { Menu, X, Star, MapPin, Phone, Mail, Send, ChevronLeft, ChevronRight, ZoomIn, Loader2 } from "lucide-react"
+import { Menu, X, Star, MapPin, Phone, Mail, Send, ChevronLeft, ChevronRight, ZoomIn, Loader2, Moon, Sun } from "lucide-react"
 import { useBranding } from "@/hooks/use-branding"
 import DynamicHead from "@/components/dynamic-head"
 import { db } from "@/lib/firebase"
@@ -24,7 +24,7 @@ import { format } from "date-fns"
 // Feedback will be fetched from Firestore dynamically
 
 // Room Card Component with Image Carousel
-function RoomCard({ room, onViewDetails, onImageClick }) {
+function RoomCard({ room, onViewDetails, onImageClick, theme = "light" }) {
   const [currentImageIndex, setCurrentImageIndex] = useState(0)
   const images = room.images?.length > 0 ? room.images.slice(0, 3) : []
 
@@ -75,11 +75,18 @@ function RoomCard({ room, onViewDetails, onImageClick }) {
   // Check if room is available for booking
   const availability = room.availability?.trim() || room.availability
   const isAvailable = !availability || availability === "Available"
+  const isDark = theme === "dark"
 
   return (
-    <div className="group bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 border border-emerald-50">
+    <div className={`group rounded-2xl shadow-lg overflow-hidden hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 ${
+      isDark
+        ? "bg-slate-800 border border-slate-700"
+        : "bg-white border border-emerald-50"
+    }`}>
       {/* Image Carousel */}
-      <div className="relative h-64 overflow-hidden bg-emerald-50">
+      <div className={`relative h-64 overflow-hidden ${
+        isDark ? "bg-slate-700" : "bg-emerald-50"
+      }`}>
         {images.length > 0 ? (
           <>
             <img
@@ -142,40 +149,62 @@ function RoomCard({ room, onViewDetails, onImageClick }) {
       {/* Card Content */}
       <div className="p-6">
         <div className="flex items-start justify-between mb-2">
-          <h3 className="text-xl font-bold text-emerald-700 line-clamp-1 flex-1">{room.name}</h3>
+          <h3 className={`text-xl font-bold line-clamp-1 flex-1 ${
+            isDark ? "text-white" : "text-emerald-700"
+          }`}>{room.name}</h3>
           {room.featured && (
-            <span className="ml-2 rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">
+            <span className={`ml-2 rounded-full px-2 py-1 text-xs font-semibold ${
+              isDark
+                ? "bg-amber-900/50 text-amber-300"
+                : "bg-amber-100 text-amber-700"
+            }`}>
               Featured
             </span>
           )}
         </div>
 
         <div className="mb-4">
-          <p className="text-2xl font-bold text-amber-600">
+          <p className={`text-2xl font-bold ${
+            isDark ? "text-amber-400" : "text-amber-600"
+          }`}>
             ₱{room.price?.toLocaleString() || 0}
-            <span className="text-sm font-normal text-gray-500">/night</span>
+            <span className={`text-sm font-normal ${
+              isDark ? "text-gray-400" : "text-gray-500"
+            }`}>/night</span>
           </p>
           {room.discount > 0 && (
-            <p className="text-sm text-gray-500 line-through">
+            <p className={`text-sm line-through ${
+              isDark ? "text-gray-500" : "text-gray-500"
+            }`}>
               ₱{Math.round((room.price * 100) / (100 - room.discount)).toLocaleString()}
             </p>
           )}
         </div>
 
-        <p className="text-gray-600 mb-4 text-sm">Max {room.maxGuests || 2} guests</p>
+        <p className={`mb-4 text-sm ${
+          isDark ? "text-gray-400" : "text-gray-600"
+        }`}>Max {room.maxGuests || 2} guests</p>
 
         {room.amenities?.length > 0 && (
           <div className="mb-4 flex flex-wrap gap-2">
             {room.amenities.slice(0, 3).map((amenity, idx) => (
               <span
                 key={idx}
-                className="text-xs rounded-full bg-emerald-50 px-2 py-1 text-emerald-700 font-medium"
+                className={`text-xs rounded-full px-2 py-1 font-medium ${
+                  isDark
+                    ? "bg-emerald-900/50 text-emerald-300"
+                    : "bg-emerald-50 text-emerald-700"
+                }`}
               >
                 {amenity}
               </span>
             ))}
             {room.amenities.length > 3 && (
-              <span className="text-xs rounded-full bg-gray-100 px-2 py-1 text-gray-600 font-medium">
+              <span className={`text-xs rounded-full px-2 py-1 font-medium ${
+                isDark
+                  ? "bg-slate-700 text-gray-300"
+                  : "bg-gray-100 text-gray-600"
+              }`}>
                 +{room.amenities.length - 3} more
               </span>
             )}
@@ -185,7 +214,11 @@ function RoomCard({ room, onViewDetails, onImageClick }) {
         <div className="flex gap-2">
           <button
             onClick={onViewDetails}
-            className="flex-1 bg-gray-100 text-gray-700 py-2.5 rounded-lg hover:bg-gray-200 transition-all duration-200 font-semibold text-sm"
+            className={`flex-1 py-2.5 rounded-lg transition-all duration-200 font-semibold text-sm ${
+              isDark
+                ? "bg-slate-700 text-gray-300 hover:bg-slate-600"
+                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+            }`}
           >
             View Details
           </button>
@@ -194,8 +227,12 @@ function RoomCard({ room, onViewDetails, onImageClick }) {
             disabled={!isAvailable}
             className={`flex-1 py-2.5 rounded-lg transition-all duration-200 font-semibold text-sm ${
               isAvailable
-                ? "bg-gradient-to-r from-emerald-600 to-emerald-700 text-white hover:from-emerald-700 hover:to-emerald-800 shadow-md hover:shadow-lg transform hover:scale-105 cursor-pointer"
-                : "bg-gray-300 text-gray-500 cursor-not-allowed opacity-60"
+                ? isDark
+                  ? "bg-gradient-to-r from-emerald-600 to-emerald-700 text-white hover:from-emerald-700 hover:to-emerald-800 shadow-md hover:shadow-lg transform hover:scale-105 cursor-pointer"
+                  : "bg-gradient-to-r from-emerald-600 to-emerald-700 text-white hover:from-emerald-700 hover:to-emerald-800 shadow-md hover:shadow-lg transform hover:scale-105 cursor-pointer"
+                : isDark
+                  ? "bg-slate-700 text-gray-500 cursor-not-allowed opacity-60"
+                  : "bg-gray-300 text-gray-500 cursor-not-allowed opacity-60"
             }`}
             title={!isAvailable ? `Room is currently ${availability?.toLowerCase() || "unavailable"}. Only available rooms can be booked.` : ""}
           >
@@ -218,6 +255,29 @@ export default function Home() {
   const [previewImage, setPreviewImage] = useState(null)
   const [roomsPage, setRoomsPage] = useState(1)
   const [isModalClosing, setIsModalClosing] = useState(false)
+  const [theme, setTheme] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("landing-theme")
+      return saved || "light"
+    }
+    return "light"
+  })
+
+  // Apply theme to document
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      if (theme === "dark") {
+        document.documentElement.classList.add("dark")
+      } else {
+        document.documentElement.classList.remove("dark")
+      }
+      localStorage.setItem("landing-theme", theme)
+    }
+  }, [theme])
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"))
+  }
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -258,6 +318,7 @@ export default function Home() {
   const [feedback, setFeedback] = useState({ name: "", email: "", rating: 5, message: "" })
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
   const [feedbacks, setFeedbacks] = useState([])
+  const [loadingFeedbacks, setLoadingFeedbacks] = useState(true)
   const [currentFeedbackIndex, setCurrentFeedbackIndex] = useState(0)
   const [bookingConfirmed, setBookingConfirmed] = useState(false)
   const [contact, setContact] = useState({ name: "", email: "", message: "" })
@@ -673,6 +734,7 @@ export default function Home() {
         
         console.log("Fetched feedbacks:", feedbacksData.length, feedbacksData)
         setFeedbacks(feedbacksData)
+        setLoadingFeedbacks(false)
       },
       (error) => {
         console.error("Error fetching feedbacks:", error)
@@ -706,11 +768,15 @@ export default function Home() {
                 .slice(0, 9)
               console.log("Fetched feedbacks (fallback):", allFeedbacks.length, allFeedbacks)
               setFeedbacks(allFeedbacks)
+              setLoadingFeedbacks(false)
             },
             (fallbackError) => {
               console.error("Fallback query also failed:", fallbackError)
+              setLoadingFeedbacks(false)
             }
           )
+        } else {
+          setLoadingFeedbacks(false)
         }
       }
     )
@@ -815,7 +881,11 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white" style={{ scrollBehavior: "smooth" }}>
+    <div className={`min-h-screen transition-colors ${
+      theme === "dark"
+        ? "bg-gradient-to-b from-slate-900 to-slate-800"
+        : "bg-gradient-to-b from-slate-50 to-white"
+    }`} style={{ scrollBehavior: "smooth" }}>
       <style jsx global>{`
         html {
           scroll-behavior: smooth;
@@ -823,38 +893,76 @@ export default function Home() {
       `}</style>
       <DynamicHead />
       {/* Navigation */}
-      <nav className="fixed w-full top-0 z-50 bg-white shadow-md">
+      <nav className={`fixed w-full top-0 z-50 shadow-md transition-colors ${
+        theme === "dark" ? "bg-slate-800" : "bg-white"
+      }`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center gap-3">
               <img
                 src={branding.logo || "/placeholder-logo.png"}
                 alt={`${branding.name} logo`}
-                className="h-10 w-10 rounded-full object-cover border border-emerald-100"
+                className={`h-10 w-10 rounded-full object-cover border ${
+                  theme === "dark" ? "border-slate-600" : "border-emerald-100"
+                }`}
               />
-              <div className="text-2xl font-bold text-emerald-700 tracking-[0.2em] uppercase hidden sm:block">
+              <div className={`text-xl sm:text-2xl font-bold tracking-[0.2em] uppercase hidden sm:block ${
+                theme === "dark" ? "text-white" : "text-emerald-700"
+              }`}>
                 {branding.name}
               </div>
             </div>
-            <div className="hidden md:flex space-x-8">
+            <div className="hidden md:flex items-center space-x-8">
               {["Home", "Rooms", "Booking", "About", "Contact"].map((item) => (
                 <a
                   key={item}
                   href={`#${item.toLowerCase()}`}
                   onClick={(e) => handleSmoothScroll(e, item.toLowerCase())}
-                  className="text-gray-700 hover:text-emerald-700 transition cursor-pointer"
+                  className={`transition cursor-pointer ${
+                    theme === "dark"
+                      ? "text-gray-300 hover:text-white"
+                      : "text-gray-700 hover:text-emerald-700"
+                  }`}
                 >
                   {item}
                 </a>
               ))}
+              <button
+                onClick={toggleTheme}
+                className={`p-2 rounded-lg transition ${
+                  theme === "dark"
+                    ? "text-gray-300 hover:bg-slate-700 hover:text-white"
+                    : "text-gray-700 hover:bg-gray-100 hover:text-emerald-700"
+                }`}
+                title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+                aria-label="Toggle theme"
+              >
+                {theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
+              </button>
             </div>
-            <button 
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)} 
-              className="md:hidden transition-transform duration-200"
-              aria-label="Toggle menu"
-            >
-              {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
-            </button>
+            <div className="flex items-center gap-2 md:hidden">
+              <button
+                onClick={toggleTheme}
+                className={`p-2 rounded-lg transition ${
+                  theme === "dark"
+                    ? "text-gray-300 hover:bg-slate-700"
+                    : "text-gray-700 hover:bg-gray-100"
+                }`}
+                title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+                aria-label="Toggle theme"
+              >
+                {theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
+              </button>
+              <button 
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)} 
+                className={`transition-transform duration-200 ${
+                  theme === "dark" ? "text-gray-300" : "text-gray-700"
+                }`}
+                aria-label="Toggle menu"
+              >
+                {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
+              </button>
+            </div>
           </div>
           <div 
             className={`md:hidden overflow-hidden transition-all duration-300 ease-in-out ${
@@ -872,7 +980,11 @@ export default function Home() {
                     handleSmoothScroll(e, item.toLowerCase())
                     setMobileMenuOpen(false) // Close mobile menu after clicking
                   }}
-                  className={`text-gray-700 hover:text-emerald-700 transition-all duration-200 cursor-pointer transform hover:translate-x-1 ${
+                  className={`transition-all duration-200 cursor-pointer transform hover:translate-x-1 ${
+                    theme === "dark"
+                      ? "text-gray-300 hover:text-white"
+                      : "text-gray-700 hover:text-emerald-700"
+                  } ${
                     mobileMenuOpen 
                       ? "opacity-100 translate-x-0" 
                       : "opacity-0 -translate-x-4"
@@ -892,7 +1004,11 @@ export default function Home() {
       {/* Hero Section */}
       <section
         id="home"
-        className="pt-24 pb-16 px-4 sm:px-6 lg:px-8 bg-gradient-to-r from-emerald-700 to-emerald-600 text-white mt-16"
+        className={`pt-24 pb-16 px-4 sm:px-6 lg:px-8 text-white mt-16 ${
+          theme === "dark"
+            ? "bg-gradient-to-r from-slate-800 to-slate-700"
+            : "bg-gradient-to-r from-emerald-700 to-emerald-600"
+        }`}
       >
         <div className="max-w-7xl mx-auto text-center">
           <h1 className="text-4xl md:text-5xl font-bold mb-4">Welcome to {branding.name}</h1>
@@ -909,14 +1025,61 @@ export default function Home() {
       {/* Rooms Section */}
       <section id="rooms" className="py-16 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto">
-          <h2 className="text-3xl md:text-4xl font-bold text-center mb-12 text-emerald-700">Our Rooms</h2>
+          <h2 className={`text-3xl md:text-4xl font-bold text-center mb-12 ${
+            theme === "dark" ? "text-white" : "text-emerald-700"
+          }`}>Our Rooms</h2>
           {loadingRooms ? (
-            <div className="text-center py-12">
-              <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-emerald-200 border-t-emerald-700"></div>
-              <p className="mt-4 text-gray-600">Loading rooms...</p>
+            <div className="grid md:grid-cols-3 gap-8">
+              {[1, 2, 3, 4, 5, 6].map((idx) => (
+                <div key={idx} className={`group rounded-2xl shadow-lg overflow-hidden border animate-pulse ${
+                  theme === "dark"
+                    ? "bg-slate-800 border-slate-700"
+                    : "bg-white border-emerald-50"
+                }`}>
+                  {/* Image Skeleton */}
+                  <div className={`relative h-64 ${
+                    theme === "dark" ? "bg-slate-700" : "bg-emerald-50"
+                  }`}></div>
+                  {/* Content Skeleton */}
+                  <div className="p-6">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className={`h-6 w-3/4 rounded ${
+                        theme === "dark" ? "bg-slate-700" : "bg-gray-200"
+                      }`}></div>
+                      <div className={`h-5 w-16 rounded-full ${
+                        theme === "dark" ? "bg-slate-700" : "bg-gray-200"
+                      }`}></div>
+                    </div>
+                    <div className={`h-8 w-1/2 rounded mb-4 ${
+                      theme === "dark" ? "bg-slate-700" : "bg-gray-200"
+                    }`}></div>
+                    <div className={`h-4 w-2/3 rounded mb-4 ${
+                      theme === "dark" ? "bg-slate-700" : "bg-gray-200"
+                    }`}></div>
+                    <div className="flex gap-2 mb-4">
+                      <div className={`h-6 w-16 rounded-full ${
+                        theme === "dark" ? "bg-slate-700" : "bg-gray-200"
+                      }`}></div>
+                      <div className={`h-6 w-20 rounded-full ${
+                        theme === "dark" ? "bg-slate-700" : "bg-gray-200"
+                      }`}></div>
+                    </div>
+                    <div className="flex gap-2">
+                      <div className={`flex-1 h-10 rounded-lg ${
+                        theme === "dark" ? "bg-slate-700" : "bg-gray-200"
+                      }`}></div>
+                      <div className={`flex-1 h-10 rounded-lg ${
+                        theme === "dark" ? "bg-slate-700" : "bg-gray-200"
+                      }`}></div>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : rooms.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
+            <div className={`text-center py-12 ${
+              theme === "dark" ? "text-gray-400" : "text-gray-500"
+            }`}>
               <p>No rooms available at the moment.</p>
             </div>
           ) : (
@@ -928,15 +1091,22 @@ export default function Home() {
                     room={room}
                     onViewDetails={() => setActiveRoom(room.id)}
                     onImageClick={(image) => setPreviewImage(image)}
+                    theme={theme}
                   />
                 ))}
               </div>
               {totalRoomPages > 1 && (
-                <div className="mt-8 flex flex-col items-center gap-4 text-sm text-gray-600 md:flex-row md:justify-between">
+                <div className={`mt-8 flex flex-col items-center gap-4 text-sm md:flex-row md:justify-between ${
+                  theme === "dark" ? "text-gray-300" : "text-gray-600"
+                }`}>
                   <button
                     onClick={() => setRoomsPage((prev) => Math.max(1, prev - 1))}
                     disabled={roomsPage === 1}
-                    className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-6 py-2.5 font-semibold text-emerald-800 transition hover:border-emerald-400 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+                    className={`inline-flex items-center gap-2 rounded-full border px-6 py-2.5 font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      theme === "dark"
+                        ? "border-emerald-700 bg-slate-800 text-emerald-300 hover:border-emerald-600 hover:bg-slate-700 disabled:hover:bg-slate-800"
+                        : "border-emerald-200 bg-white text-emerald-800 hover:border-emerald-400 hover:bg-emerald-50 disabled:hover:bg-white"
+                    }`}
                   >
                     Previous
                   </button>
@@ -946,7 +1116,11 @@ export default function Home() {
                   <button
                     onClick={() => setRoomsPage((prev) => Math.min(totalRoomPages, prev + 1))}
                     disabled={roomsPage === totalRoomPages}
-                    className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-6 py-2.5 font-semibold text-emerald-800 transition hover:border-emerald-400 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+                    className={`inline-flex items-center gap-2 rounded-full border px-6 py-2.5 font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      theme === "dark"
+                        ? "border-emerald-700 bg-slate-800 text-emerald-300 hover:border-emerald-600 hover:bg-slate-700 disabled:hover:bg-slate-800"
+                        : "border-emerald-200 bg-white text-emerald-800 hover:border-emerald-400 hover:bg-emerald-50 disabled:hover:bg-white"
+                    }`}
                   >
                     Next
                   </button>
@@ -970,7 +1144,11 @@ export default function Home() {
           }}
         >
           <div
-            className={`relative h-[92vh] w-full max-w-4xl rounded-t-3xl bg-white shadow-2xl ring-1 ring-emerald-100 flex flex-col overflow-hidden lg:h-[85vh] lg:max-w-6xl lg:rounded-3xl lg:flex-row transition-all duration-300 ${
+            className={`relative h-[92vh] w-full max-w-4xl rounded-t-3xl shadow-2xl flex flex-col overflow-hidden lg:h-[85vh] lg:max-w-6xl lg:rounded-3xl lg:flex-row transition-all duration-300 ${
+              theme === "dark"
+                ? "bg-slate-800 ring-1 ring-slate-700"
+                : "bg-white ring-1 ring-emerald-100"
+            } ${
               isModalClosing
                 ? "translate-y-full lg:translate-y-0 lg:scale-95 lg:opacity-0"
                 : "translate-y-0 lg:scale-100 lg:opacity-100 animate-[slideUp_0.3s_ease-out] lg:animate-[fadeInScale_0.3s_ease-out]"
@@ -1263,10 +1441,16 @@ export default function Home() {
       )}
 
       {/* Booking Section */}
-      <section id="booking" className="py-16 px-4 sm:px-6 lg:px-8 bg-gray-50">
+      <section id="booking" className={`py-16 px-4 sm:px-6 lg:px-8 ${
+        theme === "dark" ? "bg-slate-800" : "bg-gray-50"
+      }`}>
         <div className="max-w-3xl mx-auto">
-          <h2 className="text-3xl md:text-4xl font-bold text-center mb-12 text-emerald-700">Book Your Stay</h2>
-          <form onSubmit={handleBooking} className="bg-white p-8 rounded-lg shadow-lg">
+          <h2 className={`text-3xl md:text-4xl font-bold text-center mb-12 ${
+            theme === "dark" ? "text-white" : "text-emerald-700"
+          }`}>Book Your Stay</h2>
+          <form onSubmit={handleBooking} className={`p-8 rounded-lg shadow-lg ${
+            theme === "dark" ? "bg-slate-700" : "bg-white"
+          }`}>
             {!otpSent ? (
               <>
                 {/* Step 1: Booking Form */}
@@ -1679,9 +1863,13 @@ export default function Home() {
       </section>
 
       {/* About Section */}
-      <section id="about" className="py-16 px-4 sm:px-6 lg:px-8">
+      <section id="about" className={`py-16 px-4 sm:px-6 lg:px-8 ${
+        theme === "dark" ? "bg-slate-900" : ""
+      }`}>
         <div className="max-w-7xl mx-auto">
-          <h2 className="text-3xl md:text-4xl font-bold text-center mb-12 text-emerald-700">About {branding.name}</h2>
+          <h2 className={`text-3xl md:text-4xl font-bold text-center mb-12 ${
+            theme === "dark" ? "text-white" : "text-emerald-700"
+          }`}>About {branding.name}</h2>
           <div className="grid md:grid-cols-3 gap-8">
             {[
               {
@@ -1694,9 +1882,15 @@ export default function Home() {
                 desc: "Centrally located with easy access to major attractions and restaurants.",
               },
             ].map((item, idx) => (
-              <div key={idx} className="bg-gradient-to-br from-emerald-50 to-emerald-100 p-8 rounded-lg text-center">
-                <h3 className="text-xl font-bold text-emerald-700 mb-3">{item.title}</h3>
-                <p className="text-gray-700">{item.desc}</p>
+              <div key={idx} className={`p-8 rounded-lg text-center ${
+                theme === "dark"
+                  ? "bg-gradient-to-br from-slate-800 to-slate-700"
+                  : "bg-gradient-to-br from-emerald-50 to-emerald-100"
+              }`}>
+                <h3 className={`text-xl font-bold mb-3 ${
+                  theme === "dark" ? "text-emerald-400" : "text-emerald-700"
+                }`}>{item.title}</h3>
+                <p className={theme === "dark" ? "text-gray-300" : "text-gray-700"}>{item.desc}</p>
               </div>
             ))}
           </div>
@@ -1704,32 +1898,56 @@ export default function Home() {
       </section>
 
       {/* Contact Section */}
-      <section id="contact" className="py-16 px-4 sm:px-6 lg:px-8 bg-gray-50">
+      <section id="contact" className={`py-16 px-4 sm:px-6 lg:px-8 ${
+        theme === "dark" ? "bg-slate-800" : "bg-gray-50"
+      }`}>
         <div className="max-w-7xl mx-auto">
-          <h2 className="text-3xl md:text-4xl font-bold text-center mb-12 text-emerald-700">Contact Us</h2>
+          <h2 className={`text-3xl md:text-4xl font-bold text-center mb-12 ${
+            theme === "dark" ? "text-white" : "text-emerald-700"
+          }`}>Contact Us</h2>
           <div className="grid md:grid-cols-2 gap-8">
             <div>
               <div className="flex items-center mb-6">
-                <MapPin className="text-emerald-700 mr-4" size={24} />
+                <MapPin className={`mr-4 ${
+                  theme === "dark" ? "text-emerald-400" : "text-emerald-700"
+                }`} size={24} />
                 <div>
-                  <h3 className="font-bold text-gray-800">Address</h3>
-                  <p className="text-gray-600">{branding.address || "123 Luxury Avenue, City Center"}</p>
+                  <h3 className={`font-bold ${
+                    theme === "dark" ? "text-white" : "text-gray-800"
+                  }`}>Address</h3>
+                  <p className={theme === "dark" ? "text-gray-400" : "text-gray-600"}>{branding.address || "123 Luxury Avenue, City Center"}</p>
                 </div>
               </div>
               <div className="flex items-center mb-6">
-                <Phone className="text-emerald-700 mr-4" size={24} />
+                <Phone className={`mr-4 ${
+                  theme === "dark" ? "text-emerald-400" : "text-emerald-700"
+                }`} size={24} />
                 <div>
-                  <h3 className="font-bold text-gray-800">Phone</h3>
-                  <a href={`tel:${branding.phone || "+1 (555) 123-4567"}`} className="text-gray-600 hover:text-emerald-700 transition">
+                  <h3 className={`font-bold ${
+                    theme === "dark" ? "text-white" : "text-gray-800"
+                  }`}>Phone</h3>
+                  <a href={`tel:${branding.phone || "+1 (555) 123-4567"}`} className={`transition ${
+                    theme === "dark"
+                      ? "text-gray-400 hover:text-emerald-400"
+                      : "text-gray-600 hover:text-emerald-700"
+                  }`}>
                     {branding.phone || "+1 (555) 123-4567"}
                   </a>
                 </div>
               </div>
               <div className="flex items-center">
-                <Mail className="text-emerald-700 mr-4" size={24} />
+                <Mail className={`mr-4 ${
+                  theme === "dark" ? "text-emerald-400" : "text-emerald-700"
+                }`} size={24} />
                 <div>
-                  <h3 className="font-bold text-gray-800">Email</h3>
-                  <a href={`mailto:${branding.email || "info@luxestay.com"}`} className="text-gray-600 hover:text-emerald-700 transition">
+                  <h3 className={`font-bold ${
+                    theme === "dark" ? "text-white" : "text-gray-800"
+                  }`}>Email</h3>
+                  <a href={`mailto:${branding.email || "info@luxestay.com"}`} className={`transition ${
+                    theme === "dark"
+                      ? "text-gray-400 hover:text-emerald-400"
+                      : "text-gray-600 hover:text-emerald-700"
+                  }`}>
                     {branding.email || "info@luxestay.com"}
                   </a>
                 </div>
@@ -1741,7 +1959,11 @@ export default function Home() {
                 placeholder="Your Name"
                 value={contact.name}
                 onChange={(e) => setContact({ ...contact, name: e.target.value })}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-700"
+                className={`w-full p-3 border rounded-lg focus:outline-none focus:ring-2 ${
+                  theme === "dark"
+                    ? "border-slate-600 bg-slate-700 text-white focus:ring-emerald-400"
+                    : "border-gray-300 focus:ring-emerald-700"
+                }`}
                 required
               />
               <input
@@ -1749,7 +1971,11 @@ export default function Home() {
                 placeholder="Your Email"
                 value={contact.email}
                 onChange={(e) => setContact({ ...contact, email: e.target.value })}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-700"
+                className={`w-full p-3 border rounded-lg focus:outline-none focus:ring-2 ${
+                  theme === "dark"
+                    ? "border-slate-600 bg-slate-700 text-white focus:ring-emerald-400"
+                    : "border-gray-300 focus:ring-emerald-700"
+                }`}
                 required
               />
               <textarea
@@ -1757,7 +1983,11 @@ export default function Home() {
                 value={contact.message}
                 onChange={(e) => setContact({ ...contact, message: e.target.value })}
                 rows={4}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-700"
+                className={`w-full p-3 border rounded-lg focus:outline-none focus:ring-2 ${
+                  theme === "dark"
+                    ? "border-slate-600 bg-slate-700 text-white focus:ring-emerald-400"
+                    : "border-gray-300 focus:ring-emerald-700"
+                }`}
                 required
               />
               <button
@@ -1781,12 +2011,18 @@ export default function Home() {
       </section>
 
       {/* Feedback Section */}
-      <section className="py-16 px-4 sm:px-6 lg:px-8">
+      <section className={`py-16 px-4 sm:px-6 lg:px-8 ${
+        theme === "dark" ? "bg-slate-900" : ""
+      }`}>
         <div className="max-w-7xl mx-auto">
-          <h2 className="text-3xl md:text-4xl font-bold text-center mb-12 text-emerald-700">Guest Feedback</h2>
+          <h2 className={`text-3xl md:text-4xl font-bold text-center mb-12 ${
+            theme === "dark" ? "text-white" : "text-emerald-700"
+          }`}>Guest Feedback</h2>
           {feedbacks.length === 0 ? (
             <div className="text-center py-12 mb-12">
-              <p className="text-gray-500 text-lg">No feedback available</p>
+              <p className={`text-lg ${
+                theme === "dark" ? "text-gray-400" : "text-gray-500"
+              }`}>No feedback available</p>
             </div>
           ) : (
             <div className="relative mb-12">
@@ -1803,14 +2039,22 @@ export default function Home() {
                       className="flex-shrink-0 w-full md:w-1/3 px-4"
                       style={{ minWidth: "33.333%" }}
                     >
-                      <div className="bg-white p-6 rounded-lg shadow-md hover:shadow-xl transition-all duration-300 hover:scale-105 border border-gray-100 h-full">
+                      <div className={`p-6 rounded-lg shadow-md hover:shadow-xl transition-all duration-300 hover:scale-105 h-full ${
+                        theme === "dark"
+                          ? "bg-slate-800 border border-slate-700"
+                          : "bg-white border border-gray-100"
+                      }`}>
                 <div className="flex items-center mb-4">
                           {[...Array(fb.rating || 5)].map((_, i) => (
                     <Star key={i} size={18} className="text-amber-500 fill-amber-500" />
                   ))}
                 </div>
-                        <p className="text-gray-700 mb-4 line-clamp-4">"{fb.message || fb.text}"</p>
-                <p className="font-bold text-emerald-700">{fb.name}</p>
+                        <p className={`mb-4 line-clamp-4 ${
+                          theme === "dark" ? "text-gray-300" : "text-gray-700"
+                        }`}>"{fb.message || fb.text}"</p>
+                <p className={`font-bold ${
+                  theme === "dark" ? "text-emerald-400" : "text-emerald-700"
+                }`}>{fb.name}</p>
                       </div>
               </div>
             ))}
@@ -1836,8 +2080,14 @@ export default function Home() {
               )}
             </div>
           )}
-          <div className="bg-gradient-to-r from-emerald-50 to-emerald-100 p-8 rounded-lg max-w-2xl mx-auto">
-            <h3 className="text-2xl font-bold text-emerald-700 mb-6 text-center">Share Your Feedback</h3>
+          <div className={`p-8 rounded-lg max-w-2xl mx-auto ${
+            theme === "dark"
+              ? "bg-gradient-to-r from-slate-800 to-slate-700"
+              : "bg-gradient-to-r from-emerald-50 to-emerald-100"
+          }`}>
+            <h3 className={`text-2xl font-bold mb-6 text-center ${
+              theme === "dark" ? "text-white" : "text-emerald-700"
+            }`}>Share Your Feedback</h3>
             <form onSubmit={handleFeedback} className="space-y-4">
               <input
                 type="text"
@@ -1896,7 +2146,9 @@ export default function Home() {
       </section>
 
       {/* Footer */}
-      <footer className="bg-emerald-800 text-white py-12 px-4 sm:px-6 lg:px-8">
+      <footer className={`py-12 px-4 sm:px-6 lg:px-8 text-white ${
+        theme === "dark" ? "bg-slate-900" : "bg-emerald-800"
+      }`}>
         <div className="max-w-7xl mx-auto">
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div>
