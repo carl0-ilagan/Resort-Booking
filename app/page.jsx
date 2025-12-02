@@ -781,7 +781,9 @@ export default function Home() {
       }
     )
 
-    return () => unsubscribe()
+    return () => {
+      unsubscribe()
+    }
   }, [])
 
   // Auto-scroll feedbacks every 5 seconds
