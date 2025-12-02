@@ -1,14 +1,15 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { CheckCircle, X, Undo2, Eye, Loader2, ChevronLeft, ChevronRight, Download, DollarSign } from "lucide-react"
+import { CheckCircle, X, Undo2, Eye, Loader2, ChevronLeft, ChevronRight, Download, DollarSign, Trash2, AlertTriangle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { db } from "@/lib/firebase"
-import { collection, query, orderBy, onSnapshot } from "firebase/firestore"
+import { collection, query, orderBy, onSnapshot, doc, deleteDoc } from "firebase/firestore"
 import { toast } from "sonner"
 import { useIsMobile } from "@/hooks/use-mobile"
 
@@ -25,6 +26,7 @@ export default function ManageBookings() {
   const [bookings, setBookings] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedBooking, setSelectedBooking] = useState(null)
+  const [deleteBooking, setDeleteBooking] = useState(null)
   const [processingId, setProcessingId] = useState(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [sortBy, setSortBy] = useState("all")
@@ -330,6 +332,29 @@ export default function ManageBookings() {
     }
   }
 
+  const handleDeleteClick = (booking) => {
+    setDeleteBooking(booking)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteBooking || processingId) return
+    
+    setProcessingId(deleteBooking.id)
+    
+    try {
+      const bookingRef = doc(db, "guestbooking", deleteBooking.id)
+      await deleteDoc(bookingRef)
+      
+      toast.success("Booking deleted successfully")
+      setDeleteBooking(null)
+    } catch (error) {
+      console.error("Error deleting booking:", error)
+      toast.error("Failed to delete booking")
+    } finally {
+      setProcessingId(null)
+    }
+  }
+
   const getStatusColor = (status) => {
     switch (status?.trim()) {
       case "Approved":
@@ -627,6 +652,18 @@ export default function ManageBookings() {
                   >
                     <Eye size={18} />
                   </button>
+                  <button
+                    onClick={() => handleDeleteClick(booking)}
+                    disabled={processingId === booking.id}
+                    className="p-2 bg-red-100 text-red-800 rounded-lg hover:bg-red-200 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Delete Booking"
+                  >
+                    {processingId === booking.id ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={18} />
+                    )}
+                  </button>
                 </div>
               </div>
             </div>
@@ -738,6 +775,18 @@ export default function ManageBookings() {
                         title="View Details"
                       >
                         <Eye size={16} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteClick(booking)}
+                        disabled={processingId === booking.id}
+                        className="p-2 bg-red-100 text-red-800 rounded hover:bg-red-200 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Delete Booking"
+                      >
+                        {processingId === booking.id ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={16} />
+                        )}
                       </button>
                     </div>
                   </td>
@@ -921,6 +970,43 @@ export default function ManageBookings() {
       )}
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Modal */}
+      <AlertDialog open={!!deleteBooking} onOpenChange={(open) => !open && setDeleteBooking(null)}>
+        <AlertDialogContent className={`${isMobile ? 'max-w-[90%] w-[90%]' : 'max-w-md'}`}>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-red-500" />
+              Delete Booking
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this booking from <strong>{deleteBooking?.name}</strong>? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className={isMobile ? 'flex-col gap-2' : ''}>
+            <AlertDialogCancel
+              onClick={() => setDeleteBooking(null)}
+              className={isMobile ? 'w-full' : ''}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteConfirm}
+              disabled={processingId === deleteBooking?.id}
+              className={`bg-red-600 hover:bg-red-700 text-white ${isMobile ? 'w-full' : ''}`}
+            >
+              {processingId === deleteBooking?.id ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 size={16} className="animate-spin" />
+                  Deleting...
+                </span>
+              ) : (
+                "Delete"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

@@ -24,9 +24,12 @@ import {
   LogOut,
   Menu,
   MessageCircle,
+  Moon,
   Paintbrush,
   Star,
+  Sun,
   Trash2,
+  Upload,
   X,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -87,7 +90,29 @@ export default function AdminPage() {
   const [roomsLoading, setRoomsLoading] = useState(true)
   const [roomsError, setRoomsError] = useState("")
   const [roomsPage, setRoomsPage] = useState(1)
+  const [theme, setTheme] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("admin-theme")
+      return (saved === "dark" || saved === "light") ? saved : "light"
+    }
+    return "light"
+  })
   const sidebarBrandName = (branding.name || BRANDING_DEFAULTS.name).trim().split(" ")[0] || BRANDING_DEFAULTS.name
+
+  // Apply theme to document
+  useEffect(() => {
+    const root = document.documentElement
+    if (theme === "dark") {
+      root.classList.add("dark")
+    } else {
+      root.classList.remove("dark")
+    }
+    localStorage.setItem("admin-theme", theme)
+  }, [theme])
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"))
+  }
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
@@ -165,6 +190,74 @@ export default function AdminPage() {
   const handleBrandFieldChange = (field) => (event) => {
     const { value } = event.target
     setBrandForm((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const readFileAsDataURL = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+
+  const handleLogoUpload = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    // Check file size (5MB = 5 * 1024 * 1024 bytes)
+    const maxSize = 5 * 1024 * 1024
+    if (file.size > maxSize) {
+      toast.error("Logo file size must be less than 5MB")
+      event.target.value = "" // Reset input
+      return
+    }
+
+    // Check if it's an image
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please upload an image file")
+      event.target.value = ""
+      return
+    }
+
+    try {
+      const dataURL = await readFileAsDataURL(file)
+      setBrandForm((prev) => ({ ...prev, logo: dataURL }))
+      toast.success("Logo uploaded successfully")
+    } catch (error) {
+      console.error("Failed to upload logo:", error)
+      toast.error("Failed to upload logo. Please try again.")
+    }
+    event.target.value = "" // Reset input
+  }
+
+  const handleFaviconUpload = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    // Check file size (5MB = 5 * 1024 * 1024 bytes)
+    const maxSize = 5 * 1024 * 1024
+    if (file.size > maxSize) {
+      toast.error("Favicon file size must be less than 5MB")
+      event.target.value = "" // Reset input
+      return
+    }
+
+    // Check if it's an image
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please upload an image file")
+      event.target.value = ""
+      return
+    }
+
+    try {
+      const dataURL = await readFileAsDataURL(file)
+      setBrandForm((prev) => ({ ...prev, favicon: dataURL }))
+      toast.success("Favicon uploaded successfully")
+    } catch (error) {
+      console.error("Failed to upload favicon:", error)
+      toast.error("Failed to upload favicon. Please try again.")
+    }
+    event.target.value = "" // Reset input
   }
 
   const handleBrandingSubmit = async (event) => {
@@ -368,9 +461,17 @@ export default function AdminPage() {
         }`}
           onClick={() => setMobileSidebarVisible(false)}
         />
-    <div className="flex h-screen bg-gradient-to-b from-slate-50 to-white">
+    <div className={`flex h-screen transition-colors duration-300 ${
+      theme === "dark" 
+        ? "bg-gradient-to-b from-slate-900 to-slate-800" 
+        : "bg-gradient-to-b from-slate-50 to-white"
+    }`}>
         <aside
-          className={`fixed inset-y-0 left-0 z-40 flex h-full flex-col bg-emerald-900 text-white shadow-2xl transition-all duration-300 ease-in-out lg:static lg:shadow-none ${
+          className={`fixed inset-y-0 left-0 z-40 flex h-full flex-col shadow-2xl transition-all duration-300 ease-in-out lg:static lg:shadow-none ${
+            theme === "dark"
+              ? "bg-slate-800 text-white border-r border-slate-700"
+              : "bg-emerald-900 text-white"
+          } ${
             mobileSidebarVisible 
               ? "translate-x-0 w-64" 
               : "-translate-x-full w-64 lg:translate-x-0"
@@ -378,7 +479,9 @@ export default function AdminPage() {
             sidebarExpanded ? "lg:w-64" : "lg:w-20"
           }`}
         >
-          <div className={`relative flex items-center gap-3 border-b border-emerald-800 transition-all duration-300 ${
+          <div className={`relative flex items-center gap-3 border-b transition-all duration-300 ${
+            theme === "dark" ? "border-slate-700" : "border-emerald-800"
+          } ${
             sidebarExpanded ? "px-5" : "px-3 lg:px-3"
           } py-6`}>
             <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border border-emerald-600 bg-white/10">
@@ -428,9 +531,13 @@ export default function AdminPage() {
                     setMobileSidebarVisible(false)
                   }}
                   className={`group relative flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold tracking-wide transition-all duration-200 ${
-                    isActive
-                      ? "bg-white/15 text-white shadow-inner shadow-emerald-900/40"
-                      : "text-emerald-100 hover:bg-white/5 hover:text-white"
+                    theme === "dark"
+                      ? isActive
+                        ? "bg-slate-700 text-white shadow-inner"
+                        : "text-slate-300 hover:bg-slate-700/50 hover:text-white"
+                      : isActive
+                        ? "bg-white/15 text-white shadow-inner shadow-emerald-900/40"
+                        : "text-emerald-100 hover:bg-white/5 hover:text-white"
                   }`}
                 >
                   <Icon size={18} className="flex-shrink-0" />
@@ -453,9 +560,11 @@ export default function AdminPage() {
             })}
         </nav>
 
-          <div className={`border-t border-emerald-800 transition-all duration-300 ${
+          <div className={`border-t transition-all duration-300 ${
+            theme === "dark" ? "border-slate-700" : "border-emerald-800"
+          } ${
             sidebarExpanded ? "px-5" : "px-3 lg:px-3"
-          } py-5`}>
+          } py-5 space-y-3`}>
             <div
               className={`text-sm overflow-hidden transition-all duration-300 ${
                 (mobileSidebarVisible || sidebarExpanded)
@@ -463,9 +572,43 @@ export default function AdminPage() {
                   : "max-w-0 opacity-0 lg:max-w-0 lg:opacity-0"
               }`}
             >
-              <p className="text-xs uppercase tracking-[0.25em] text-emerald-200 whitespace-nowrap">Signed in as</p>
+              <p className={`text-xs uppercase tracking-[0.25em] whitespace-nowrap ${
+                theme === "dark" ? "text-slate-400" : "text-emerald-200"
+              }`}>Signed in as</p>
               <p className="font-semibold whitespace-nowrap">{adminUser?.displayName ?? "Administrator"}</p>
             </div>
+            
+            {/* Theme Toggle Button */}
+            <button
+              onClick={toggleTheme}
+              className={`relative w-full rounded-lg py-2 font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+                theme === "dark"
+                  ? "bg-slate-700 text-white hover:bg-slate-600"
+                  : "bg-emerald-800 text-white hover:bg-emerald-700"
+              }`}
+              title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+            >
+              <span className={`transition-all duration-300 ${
+                (mobileSidebarVisible || sidebarExpanded)
+                  ? "opacity-100 max-w-full" 
+                  : "opacity-0 max-w-0 overflow-hidden lg:opacity-0 lg:max-w-0"
+              }`}>
+                {theme === "dark" ? "Light Mode" : "Dark Mode"}
+              </span>
+              <span className={`absolute inset-0 flex items-center justify-center transition-opacity duration-300 ${
+                (mobileSidebarVisible || sidebarExpanded)
+                  ? "opacity-0 pointer-events-none"
+                  : "opacity-100 lg:opacity-100"
+              }`}>
+                {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+              </span>
+              {(mobileSidebarVisible || sidebarExpanded) && (
+                <span className="flex-shrink-0">
+                  {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+                </span>
+              )}
+            </button>
+            
           <button
               onClick={handleLogout}
               className="relative w-full rounded-lg bg-red-600 py-2 font-semibold text-white transition-all duration-200 hover:bg-red-700 flex items-center justify-center"
@@ -486,7 +629,9 @@ export default function AdminPage() {
           </div>
         </aside>
 
-        <main className={`flex-1 overflow-auto transition-all duration-300 ${
+        <main className={`flex-1 overflow-auto transition-colors duration-300 ${
+          theme === "dark" ? "bg-slate-900" : "bg-background"
+        } ${
           sidebarExpanded ? "lg:ml-0" : "lg:ml-0"
         }`}>
           <div className="p-6 lg:p-8">
@@ -516,8 +661,12 @@ export default function AdminPage() {
             <div>
               <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <h1 className="text-3xl font-bold text-gray-800">Manage Rooms</h1>
-                  <p className="text-sm text-gray-500">Add new rooms or update existing inventory.</p>
+                  <h1 className={`text-3xl font-bold ${
+                    theme === "dark" ? "text-white" : "text-gray-800"
+                  }`}>Manage Rooms</h1>
+                  <p className={`text-sm ${
+                    theme === "dark" ? "text-gray-400" : "text-gray-500"
+                  }`}>Add new rooms or update existing inventory.</p>
                 </div>
                 <button
                   onClick={() => setAddRoomOpen(true)}
@@ -531,22 +680,40 @@ export default function AdminPage() {
               {roomsLoading ? (
                 <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
                   {[0, 1, 2].map((idx) => (
-                    <div key={idx} className="rounded-2xl border border-emerald-50 bg-white p-6 shadow animate-pulse">
-                      <div className="mb-4 h-4 w-1/3 rounded bg-slate-200" />
-                      <div className="mb-6 h-3 w-2/3 rounded bg-slate-100" />
-                      <div className="h-10 rounded bg-slate-100" />
+                    <div key={idx} className={`rounded-2xl border p-6 shadow animate-pulse ${
+                      theme === "dark" 
+                        ? "border-slate-700 bg-slate-800" 
+                        : "border-emerald-50 bg-white"
+                    }`}>
+                      <div className={`mb-4 h-4 w-1/3 rounded ${
+                        theme === "dark" ? "bg-slate-700" : "bg-slate-200"
+                      }`} />
+                      <div className={`mb-6 h-3 w-2/3 rounded ${
+                        theme === "dark" ? "bg-slate-700" : "bg-slate-100"
+                      }`} />
+                      <div className={`h-10 rounded ${
+                        theme === "dark" ? "bg-slate-700" : "bg-slate-100"
+                      }`} />
                   </div>
                 ))}
               </div>
               ) : roomsError ? (
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">{roomsError}</div>
+                <div className={`rounded-2xl border p-5 text-sm ${
+                  theme === "dark"
+                    ? "border-red-800 bg-red-900/30 text-red-300"
+                    : "border-red-200 bg-red-50 text-red-700"
+                }`}>{roomsError}</div>
               ) : rooms.length ? (
                 <>
                   <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
                     {paginatedRooms.map((room) => (
                     <div
                       key={room.id}
-                      className="group flex h-full flex-col rounded-2xl border border-emerald-50 bg-white p-6 shadow transition hover:-translate-y-1 hover:shadow-emerald-200"
+                      className={`group flex h-full flex-col rounded-2xl border p-6 shadow transition hover:-translate-y-1 ${
+                        theme === "dark"
+                          ? "border-slate-700 bg-slate-800 hover:shadow-slate-700/50"
+                          : "border-emerald-50 bg-white hover:shadow-emerald-200"
+                      }`}
                     >
                       <div className="relative mb-4">
                         {room.images?.[0] ? (
@@ -557,7 +724,11 @@ export default function AdminPage() {
                             loading="lazy"
                           />
                         ) : (
-                          <div className="flex h-36 w-full items-center justify-center rounded-xl border border-dashed border-emerald-100 bg-emerald-50/50 text-sm text-emerald-700">
+                          <div className={`flex h-36 w-full items-center justify-center rounded-xl border border-dashed text-sm ${
+                            theme === "dark"
+                              ? "border-slate-600 bg-slate-700/50 text-slate-400"
+                              : "border-emerald-100 bg-emerald-50/50 text-emerald-700"
+                          }`}>
                             No preview
             </div>
           )}
@@ -566,22 +737,34 @@ export default function AdminPage() {
                             setPreviewRoom(room)
                             setPreviewOpen(true)
                           }}
-                          className="absolute right-3 top-3 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/40 bg-white/80 text-emerald-800 shadow transition hover:bg-white"
+                          className={`absolute right-3 top-3 inline-flex h-10 w-10 items-center justify-center rounded-full border shadow transition ${
+                            theme === "dark"
+                              ? "border-slate-600/40 bg-slate-800/80 text-slate-300 hover:bg-slate-700"
+                              : "border-white/40 bg-white/80 text-emerald-800 hover:bg-white"
+                          }`}
                           title="Preview room"
                         >
                           <Eye size={18} />
                         </button>
                       </div>
                       <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-lg font-bold text-emerald-700 line-clamp-1">{room.name}</h3>
+                        <h3 className={`text-lg font-bold line-clamp-1 ${
+                          theme === "dark" ? "text-white" : "text-emerald-700"
+                        }`}>{room.name}</h3>
                         <div className="flex items-center gap-2">
                           <span
                             className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                              room.availability === "Available"
-                                ? "bg-emerald-50 text-emerald-700"
-                                : room.availability === "Maintenance"
-                                  ? "bg-amber-50 text-amber-700"
-                                  : "bg-slate-100 text-slate-800"
+                              theme === "dark"
+                                ? room.availability === "Available"
+                                  ? "bg-emerald-900/50 text-emerald-300"
+                                  : room.availability === "Maintenance"
+                                    ? "bg-amber-900/50 text-amber-300"
+                                    : "bg-slate-700 text-slate-300"
+                                : room.availability === "Available"
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : room.availability === "Maintenance"
+                                    ? "bg-amber-50 text-amber-700"
+                                    : "bg-slate-100 text-slate-800"
                             }`}
                           >
                             {room.availability}
@@ -619,23 +802,39 @@ export default function AdminPage() {
                           )}
                         </div>
                       </div>
-                      <p className="mt-2 text-sm text-gray-500">
+                      <p className={`mt-2 text-sm ${
+                        theme === "dark" ? "text-gray-400" : "text-gray-500"
+                      }`}>
                         ₱{(room.price ?? 0).toLocaleString()} / night • {room.maxGuests ?? 1} guests
                     </p>
-                      <div className="mt-4 flex flex-wrap gap-2 text-xs text-gray-500">
-                        <span className="rounded-full bg-gray-100 px-3 py-1">Type: {room.type}</span>
-                        <span className="rounded-full bg-gray-100 px-3 py-1">Beds: {room.beds}</span>
-                        {room.featured && <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-700">Featured</span>}
+                      <div className={`mt-4 flex flex-wrap gap-2 text-xs ${
+                        theme === "dark" ? "text-gray-400" : "text-gray-500"
+                      }`}>
+                        <span className={`rounded-full px-3 py-1 ${
+                          theme === "dark" ? "bg-slate-700" : "bg-gray-100"
+                        }`}>Type: {room.type}</span>
+                        <span className={`rounded-full px-3 py-1 ${
+                          theme === "dark" ? "bg-slate-700" : "bg-gray-100"
+                        }`}>Beds: {room.beds}</span>
+                        {room.featured && <span className={`rounded-full px-3 py-1 ${
+                          theme === "dark" ? "bg-amber-900/50 text-amber-300" : "bg-amber-100 text-amber-700"
+                        }`}>Featured</span>}
                       </div>
                       {room.amenities?.length > 0 && (
-                        <div className="mt-4 flex flex-wrap gap-2 text-xs text-gray-600">
+                        <div className={`mt-4 flex flex-wrap gap-2 text-xs ${
+                          theme === "dark" ? "text-gray-300" : "text-gray-600"
+                        }`}>
                           {room.amenities.slice(0, 4).map((amenity, index) => (
-                            <span key={`${room.id}-amenity-${index}`} className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">
+                            <span key={`${room.id}-amenity-${index}`} className={`rounded-full px-2 py-1 ${
+                              theme === "dark" ? "bg-emerald-900/50 text-emerald-300" : "bg-emerald-50 text-emerald-700"
+                            }`}>
                               {amenity}
                             </span>
                           ))}
                           {room.amenities.length > 4 && (
-                            <span className="rounded-full bg-gray-100 px-2 py-1 text-gray-600">+{room.amenities.length - 4} more</span>
+                            <span className={`rounded-full px-2 py-1 ${
+                              theme === "dark" ? "bg-slate-700 text-gray-300" : "bg-gray-100 text-gray-600"
+                            }`}>+{room.amenities.length - 4} more</span>
                           )}
                         </div>
                       )}
@@ -643,11 +842,17 @@ export default function AdminPage() {
                     ))}
                   </div>
                   {totalRoomPages > 1 && (
-                    <div className="mt-6 flex flex-col items-center gap-3 text-sm text-gray-600 md:flex-row md:justify-between">
+                    <div className={`mt-6 flex flex-col items-center gap-3 text-sm md:flex-row md:justify-between ${
+                      theme === "dark" ? "text-gray-300" : "text-gray-600"
+                    }`}>
                       <button
                         onClick={() => setRoomsPage((prev) => Math.max(1, prev - 1))}
                         disabled={roomsPage === 1}
-                        className="inline-flex items-center gap-2 rounded-full border border-emerald-200 px-4 py-2 font-semibold text-emerald-800 transition hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                        className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                          theme === "dark"
+                            ? "border-emerald-700 text-emerald-300 hover:border-emerald-600"
+                            : "border-emerald-200 text-emerald-800 hover:border-emerald-400"
+                        }`}
                       >
                         Previous
                       </button>
@@ -657,7 +862,11 @@ export default function AdminPage() {
                       <button
                         onClick={() => setRoomsPage((prev) => Math.min(totalRoomPages, prev + 1))}
                         disabled={roomsPage === totalRoomPages}
-                        className="inline-flex items-center gap-2 rounded-full border border-emerald-200 px-4 py-2 font-semibold text-emerald-800 transition hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                        className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                          theme === "dark"
+                            ? "border-emerald-700 text-emerald-300 hover:border-emerald-600"
+                            : "border-emerald-200 text-emerald-800 hover:border-emerald-400"
+                        }`}
                       >
                         Next
                       </button>
@@ -665,8 +874,12 @@ export default function AdminPage() {
                   )}
                 </>
               ) : (
-                <div className="rounded-2xl border border-dashed border-emerald-200 bg-white p-8 text-center text-sm text-gray-500">
-                  No rooms added yet. Click “Add Room” to create one.
+                <div className={`rounded-2xl border border-dashed p-8 text-center text-sm ${
+                  theme === "dark"
+                    ? "border-emerald-800 bg-slate-800 text-gray-400"
+                    : "border-emerald-200 bg-white text-gray-500"
+                }`}>
+                  No rooms added yet. Click "Add Room" to create one.
               </div>
               )}
             </div>
@@ -707,26 +920,106 @@ export default function AdminPage() {
                     />
                   </div>
                   <div>
-                      <label className="mb-2 block text-sm font-semibold text-foreground">Logo URL</label>
-                    <input
-                      type="url"
-                        value={brandForm.logo || ""}
-                      onChange={handleBrandFieldChange("logo")}
-                        className="w-full rounded-lg border border-border bg-background px-4 py-2 text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                      placeholder="https://your-domain.com/logo.png"
-                    />
-                      <p className="mt-2 text-xs text-muted-foreground">Tip: Use a transparent PNG or SVG for best results.</p>
+                      <label className="mb-2 block text-sm font-semibold text-foreground">Logo</label>
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-3">
+                          <label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-foreground transition hover:bg-secondary">
+                            <Upload size={16} />
+                            <span className="text-sm font-medium">Upload Logo</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={handleLogoUpload}
+                              className="hidden"
+                            />
+                          </label>
+                          {brandForm.logo && (
+                            <button
+                              type="button"
+                              onClick={() => setBrandForm((prev) => ({ ...prev, logo: "" }))}
+                              className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                        {brandForm.logo && (
+                          <div className="relative rounded-lg border border-border bg-secondary p-3">
+                            <img
+                              src={brandForm.logo}
+                              alt="Logo preview"
+                              className="mx-auto max-h-24 w-auto object-contain"
+                            />
+                          </div>
+                        )}
+                        <div className="relative">
+                          <div className="absolute inset-0 flex items-center">
+                            <span className="w-full border-t border-border"></span>
+                          </div>
+                          <div className="relative flex justify-center text-xs uppercase">
+                            <span className="bg-card px-2 text-muted-foreground">Or</span>
+                          </div>
+                        </div>
+                        <input
+                          type="url"
+                          value={brandForm.logo?.startsWith("data:") ? "" : (brandForm.logo || "")}
+                          onChange={handleBrandFieldChange("logo")}
+                          className="w-full rounded-lg border border-border bg-background px-4 py-2 text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                          placeholder="https://your-domain.com/logo.png"
+                        />
+                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">Upload an image file (max 5MB) or enter a URL. Use a transparent PNG or SVG for best results.</p>
                     </div>
                     <div>
-                      <label className="mb-2 block text-sm font-semibold text-foreground">Favicon URL</label>
-                      <input
-                        type="url"
-                        value={brandForm.favicon || ""}
-                        onChange={handleBrandFieldChange("favicon")}
-                        className="w-full rounded-lg border border-border bg-background px-4 py-2 text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                        placeholder="https://your-domain.com/favicon.ico"
-                      />
-                      <p className="mt-2 text-xs text-muted-foreground">Icon shown in browser tab (16x16 or 32x32 recommended).</p>
+                      <label className="mb-2 block text-sm font-semibold text-foreground">Favicon</label>
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-3">
+                          <label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-foreground transition hover:bg-secondary">
+                            <Upload size={16} />
+                            <span className="text-sm font-medium">Upload Favicon</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={handleFaviconUpload}
+                              className="hidden"
+                            />
+                          </label>
+                          {brandForm.favicon && (
+                            <button
+                              type="button"
+                              onClick={() => setBrandForm((prev) => ({ ...prev, favicon: "" }))}
+                              className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                        {brandForm.favicon && (
+                          <div className="relative rounded-lg border border-border bg-secondary p-3">
+                            <img
+                              src={brandForm.favicon}
+                              alt="Favicon preview"
+                              className="mx-auto h-16 w-16 object-contain"
+                            />
+                          </div>
+                        )}
+                        <div className="relative">
+                          <div className="absolute inset-0 flex items-center">
+                            <span className="w-full border-t border-border"></span>
+                          </div>
+                          <div className="relative flex justify-center text-xs uppercase">
+                            <span className="bg-card px-2 text-muted-foreground">Or</span>
+                          </div>
+                        </div>
+                        <input
+                          type="url"
+                          value={brandForm.favicon?.startsWith("data:") ? "" : (brandForm.favicon || "")}
+                          onChange={handleBrandFieldChange("favicon")}
+                          className="w-full rounded-lg border border-border bg-background px-4 py-2 text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                          placeholder="https://your-domain.com/favicon.ico"
+                        />
+                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">Upload an image file (max 5MB) or enter a URL. Icon shown in browser tab (16x16 or 32x32 recommended).</p>
                     </div>
                     <div>
                       <label className="mb-2 block text-sm font-semibold text-foreground">Tab Title</label>
