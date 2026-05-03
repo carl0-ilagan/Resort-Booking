@@ -4,12 +4,27 @@ import { useState, useEffect, useMemo } from "react"
 import { Users, DoorOpen, BookOpen, DollarSign, MessageSquare, CheckCircle, TrendingUp, RefreshCw } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { db } from "@/lib/firebase"
-import { collection, query, orderBy, onSnapshot } from "firebase/firestore"
+import { collection, query, orderBy, onSnapshot, where } from "firebase/firestore"
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Line, LineChart, XAxis, YAxis, CartesianGrid, Legend } from "recharts"
 import { toast } from "sonner"
 
-export default function AdminOverview() {
+function bookingBelongsToTenant(data, tenantOwnerUid) {
+  if (tenantOwnerUid) return data.ownerUid === tenantOwnerUid
+  return !data.ownerUid
+}
+
+function roomBelongsToTenant(data, tenantOwnerUid) {
+  if (tenantOwnerUid) return data.ownerUid === tenantOwnerUid
+  return !data.ownerUid
+}
+
+function feedbackBelongsToTenant(data, tenantOwnerUid) {
+  if (tenantOwnerUid) return data.ownerUid === tenantOwnerUid
+  return !data.ownerUid
+}
+
+export default function AdminOverview({ isLegacyHelpdesk = true, ownerUid = null }) {
   const [loading, setLoading] = useState(true)
   const [rooms, setRooms] = useState([])
   const [bookings, setBookings] = useState([])
@@ -55,131 +70,180 @@ export default function AdminOverview() {
 
     // Fetch rooms
     const roomsRef = collection(db, "rooms")
-    const unsubscribeRooms = onSnapshot(
-      roomsRef,
-      (snapshot) => {
-        const roomsData = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }))
-        console.log("Rooms loaded:", roomsData.length)
-        setRooms(roomsData)
-        checkAllLoaded()
-      },
-      (error) => {
-        console.error("Error fetching rooms:", error)
-        checkAllLoaded()
-      }
-    )
+    const roomsQuery = isLegacyHelpdesk
+      ? roomsRef
+      : ownerUid
+        ? query(roomsRef, where("ownerUid", "==", ownerUid))
+        : null
 
-    // Fetch bookings
-    const bookingsRef = collection(db, "guestbooking")
-    let unsubscribeBookings
-    
-    try {
-      const q = query(bookingsRef, orderBy("createdAt", "desc"))
-      unsubscribeBookings = onSnapshot(
-        q,
+    const unsubscribeRooms =
+      roomsQuery &&
+      onSnapshot(
+        roomsQuery,
         (snapshot) => {
-          const bookingsData = snapshot.docs.map((doc) => {
-            const data = doc.data()
-            return {
-              id: doc.id,
-              ...data,
-              createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : (data.createdAt ? new Date(data.createdAt) : new Date()),
-              paidAt: data.paidAt?.toDate ? data.paidAt.toDate() : (data.paidAt ? new Date(data.paidAt) : null),
-            }
-          })
-          console.log("Bookings loaded:", bookingsData.length, "Sample:", bookingsData[0])
-          setBookings(bookingsData)
+          let roomsData = snapshot.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          }))
+          if (isLegacyHelpdesk) {
+            roomsData = roomsData.filter((r) => roomBelongsToTenant(r, null))
+          }
+          console.log("Rooms loaded:", roomsData.length)
+          setRooms(roomsData)
           checkAllLoaded()
         },
         (error) => {
-          console.error("Error fetching bookings with orderBy:", error)
-          // Fallback: fetch without orderBy
-          const fallbackUnsubscribe = onSnapshot(
-            bookingsRef,
-            (snapshot) => {
-              const bookingsData = snapshot.docs.map((doc) => {
-                const data = doc.data()
-                return {
-                  id: doc.id,
-                  ...data,
-                  createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : (data.createdAt ? new Date(data.createdAt) : new Date()),
-                  paidAt: data.paidAt?.toDate ? data.paidAt.toDate() : (data.paidAt ? new Date(data.paidAt) : null),
-                }
-              }).sort((a, b) => {
+          console.error("Error fetching rooms:", error)
+          checkAllLoaded()
+        },
+      )
+
+    if (!roomsQuery) {
+      setRooms([])
+      checkAllLoaded()
+    }
+
+    // Fetch bookings
+    const bookingsRef = collection(db, "guestbooking")
+    let unsubscribeBookings = () => {}
+
+    const mapBookingDoc = (doc) => {
+      const data = doc.data()
+      return {
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : (data.createdAt ? new Date(data.createdAt) : new Date()),
+        paidAt: data.paidAt?.toDate ? data.paidAt.toDate() : (data.paidAt ? new Date(data.paidAt) : null),
+      }
+    }
+
+    if (isLegacyHelpdesk) {
+      try {
+        const q = query(bookingsRef, orderBy("createdAt", "desc"))
+        unsubscribeBookings = onSnapshot(
+          q,
+          (snapshot) => {
+            const bookingsData = snapshot.docs
+              .map(mapBookingDoc)
+              .filter((b) => bookingBelongsToTenant(b, null))
+            console.log("Bookings loaded:", bookingsData.length, "Sample:", bookingsData[0])
+            setBookings(bookingsData)
+            checkAllLoaded()
+          },
+          (error) => {
+            console.error("Error fetching bookings with orderBy:", error)
+            const fallbackUnsubscribe = onSnapshot(
+              bookingsRef,
+              (snapshot) => {
+                const bookingsData = snapshot.docs
+                  .map(mapBookingDoc)
+                  .filter((b) => bookingBelongsToTenant(b, null))
+                  .sort((a, b) => {
+                    const dateA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0
+                    const dateB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0
+                    return dateB - dateA
+                  })
+                console.log("Bookings loaded (fallback):", bookingsData.length)
+                setBookings(bookingsData)
+                checkAllLoaded()
+              },
+              (fallbackError) => {
+                console.error("Error fetching bookings (fallback):", fallbackError)
+                checkAllLoaded()
+              },
+            )
+            unsubscribeBookings = fallbackUnsubscribe
+          },
+        )
+      } catch (queryError) {
+        console.error("Error creating bookings query:", queryError)
+        unsubscribeBookings = onSnapshot(
+          bookingsRef,
+          (snapshot) => {
+            const bookingsData = snapshot.docs
+              .map(mapBookingDoc)
+              .filter((b) => bookingBelongsToTenant(b, null))
+              .sort((a, b) => {
                 const dateA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0
                 const dateB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0
                 return dateB - dateA
               })
-              console.log("Bookings loaded (fallback):", bookingsData.length)
-              setBookings(bookingsData)
-              checkAllLoaded()
-            },
-            (fallbackError) => {
-              console.error("Error fetching bookings (fallback):", fallbackError)
-              checkAllLoaded()
-            }
-          )
-          unsubscribeBookings = fallbackUnsubscribe
-        }
-      )
-    } catch (queryError) {
-      console.error("Error creating bookings query:", queryError)
-      // Fallback without orderBy
+            console.log("Bookings loaded (no orderBy):", bookingsData.length)
+            setBookings(bookingsData)
+            checkAllLoaded()
+          },
+          (error) => {
+            console.error("Error fetching bookings:", error)
+            checkAllLoaded()
+          },
+        )
+      }
+    } else if (ownerUid) {
+      const q = query(bookingsRef, where("ownerUid", "==", ownerUid))
       unsubscribeBookings = onSnapshot(
-        bookingsRef,
+        q,
         (snapshot) => {
-          const bookingsData = snapshot.docs.map((doc) => {
-            const data = doc.data()
-            return {
-              id: doc.id,
-              ...data,
-              createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : (data.createdAt ? new Date(data.createdAt) : new Date()),
-              paidAt: data.paidAt?.toDate ? data.paidAt.toDate() : (data.paidAt ? new Date(data.paidAt) : null),
-            }
-          }).sort((a, b) => {
-            const dateA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0
-            const dateB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0
-            return dateB - dateA
-          })
-          console.log("Bookings loaded (no orderBy):", bookingsData.length)
+          const bookingsData = snapshot.docs
+            .map(mapBookingDoc)
+            .sort((a, b) => {
+              const dateA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0
+              const dateB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0
+              return dateB - dateA
+            })
           setBookings(bookingsData)
           checkAllLoaded()
         },
         (error) => {
           console.error("Error fetching bookings:", error)
           checkAllLoaded()
-        }
+        },
       )
+    } else {
+      setBookings([])
+      checkAllLoaded()
     }
 
     // Fetch feedbacks
     const feedbacksRef = collection(db, "feedbacks")
-    const unsubscribeFeedbacks = onSnapshot(
-      feedbacksRef,
-      (snapshot) => {
-        const feedbacksData = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }))
-        console.log("Feedbacks loaded:", feedbacksData.length)
-        setFeedbacks(feedbacksData)
-        checkAllLoaded()
-      },
-      (error) => {
-        console.error("Error fetching feedbacks:", error)
-        checkAllLoaded()
-      }
-    )
+    const feedbacksQuery = isLegacyHelpdesk
+      ? feedbacksRef
+      : ownerUid
+        ? query(feedbacksRef, where("ownerUid", "==", ownerUid))
+        : null
+
+    const unsubscribeFeedbacks =
+      feedbacksQuery &&
+      onSnapshot(
+        feedbacksQuery,
+        (snapshot) => {
+          let feedbacksData = snapshot.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          }))
+          if (isLegacyHelpdesk) {
+            feedbacksData = feedbacksData.filter((fb) => feedbackBelongsToTenant(fb, null))
+          }
+          console.log("Feedbacks loaded:", feedbacksData.length)
+          setFeedbacks(feedbacksData)
+          checkAllLoaded()
+        },
+        (error) => {
+          console.error("Error fetching feedbacks:", error)
+          checkAllLoaded()
+        },
+      )
+
+    if (!feedbacksQuery) {
+      setFeedbacks([])
+      checkAllLoaded()
+    }
 
     return () => {
-      unsubscribeRooms()
+      if (unsubscribeRooms) unsubscribeRooms()
       unsubscribeBookings()
-      unsubscribeFeedbacks()
+      if (unsubscribeFeedbacks) unsubscribeFeedbacks()
     }
-  }, [])
+  }, [isLegacyHelpdesk, ownerUid])
 
   // Calculate revenue data
   useEffect(() => {

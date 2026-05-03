@@ -9,11 +9,16 @@ import { Pagination, PaginationContent, PaginationItem, PaginationLink, Paginati
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { db } from "@/lib/firebase"
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc } from "firebase/firestore"
+import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, where } from "firebase/firestore"
 import { toast } from "sonner"
 import { useIsMobile } from "@/hooks/use-mobile"
 
-export default function ManageFeedback() {
+function feedbackBelongsToTenant(data, tenantOwnerUid) {
+  if (tenantOwnerUid) return data.ownerUid === tenantOwnerUid
+  return !data.ownerUid
+}
+
+export default function ManageFeedback({ isLegacyHelpdesk = true, ownerUid = null }) {
   const [feedbacks, setFeedbacks] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedFeedback, setSelectedFeedback] = useState(null)
@@ -27,15 +32,50 @@ export default function ManageFeedback() {
   // Fetch feedbacks from Firestore
   useEffect(() => {
     const feedbacksRef = collection(db, "feedbacks")
-    const q = query(feedbacksRef, orderBy("createdAt", "desc"))
 
+    if (isLegacyHelpdesk) {
+      const q = query(feedbacksRef, orderBy("createdAt", "desc"))
+      const unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          const feedbacksData = snapshot.docs
+            .map((doc) => ({
+              id: doc.id,
+              ...doc.data(),
+            }))
+            .filter((fb) => feedbackBelongsToTenant(fb, null))
+          setFeedbacks(feedbacksData)
+          setLoading(false)
+        },
+        (error) => {
+          console.error("Error fetching feedbacks:", error)
+          toast.error("Failed to load feedbacks")
+          setLoading(false)
+        },
+      )
+      return () => unsubscribe()
+    }
+
+    if (!ownerUid) {
+      setFeedbacks([])
+      setLoading(false)
+      return
+    }
+
+    const q = query(feedbacksRef, where("ownerUid", "==", ownerUid))
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const feedbacksData = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }))
+        const feedbacksData = snapshot.docs
+          .map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          }))
+          .sort((a, b) => {
+            const ta = a.createdAt?.toMillis?.() ?? 0
+            const tb = b.createdAt?.toMillis?.() ?? 0
+            return tb - ta
+          })
         setFeedbacks(feedbacksData)
         setLoading(false)
       },
@@ -43,11 +83,11 @@ export default function ManageFeedback() {
         console.error("Error fetching feedbacks:", error)
         toast.error("Failed to load feedbacks")
         setLoading(false)
-      }
+      },
     )
 
     return () => unsubscribe()
-  }, [])
+  }, [isLegacyHelpdesk, ownerUid])
 
   const handleStatusChange = async (feedbackId, currentStatus) => {
     if (processingId) return

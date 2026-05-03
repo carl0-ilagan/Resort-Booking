@@ -2,7 +2,22 @@ import { NextResponse } from "next/server"
 import { db } from "@/lib/firebase"
 import { collection, addDoc, serverTimestamp, query, where, getDocs } from "firebase/firestore"
 import { otpStore } from "@/lib/otp-store"
-import nodemailer from "nodemailer"
+import {
+  bookingBelongsToTenant,
+  getLegacyUnscopedRoomsOwnerUidFromDb,
+  normalizeOwnerUid,
+  otpStorageKey,
+  roomBelongsToTenant,
+} from "@/lib/booking-tenant"
+import { resolveEmailBrandName } from "@/lib/resort-mail-branding"
+import {
+  escapeEmailHtml,
+  formalEmailShell,
+  formalHeading,
+  formalParagraph,
+  formalDetailTable,
+  defaultBookingFooter,
+} from "@/lib/booking-email-layout"
 
 const MAX_BOOKINGS_PER_EMAIL = 3
 
@@ -32,10 +47,26 @@ function parseDate(dateValue) {
 
 export async function POST(request) {
   try {
-    let { name, email, phone, checkIn, checkOut, guests, roomType, specialRequests, otp } = await request.json()
+    const legacyUnscopedUid = await getLegacyUnscopedRoomsOwnerUidFromDb(db)
+    let {
+      name,
+      email,
+      phone,
+      checkIn,
+      checkOut,
+      guests,
+      roomType,
+      specialRequests,
+      proofOfPaymentUrl,
+      validIdUrl,
+      otp,
+      ownerUid: rawOwnerUid,
+    } = await request.json()
 
     // Normalize email: trim whitespace and convert to lowercase
     email = email ? email.trim().toLowerCase() : ""
+    const ownerUid = normalizeOwnerUid(rawOwnerUid)
+    const otpKey = otpStorageKey(email, ownerUid)
 
     // Validate required fields
     if (!name || !email || !phone || !checkIn || !checkOut || !guests || !roomType || !otp) {
@@ -45,12 +76,21 @@ export async function POST(request) {
       )
     }
 
+    if (ownerUid && (!proofOfPaymentUrl || !validIdUrl)) {
+      return NextResponse.json(
+        { error: "Please upload proof of payment and 1 valid ID before confirming." },
+        { status: 400 },
+      )
+    }
+
     // Check booking limit for this email
     try {
       const bookingsRef = collection(db, "guestbooking")
       const q = query(bookingsRef, where("email", "==", email))
       const querySnapshot = await getDocs(q)
-      const existingBookingsCount = querySnapshot.size
+      const existingBookingsCount = querySnapshot.docs.filter((d) =>
+        bookingBelongsToTenant(d.data(), ownerUid, legacyUnscopedUid),
+      ).length
 
       if (existingBookingsCount >= MAX_BOOKINGS_PER_EMAIL) {
         return NextResponse.json(
@@ -73,22 +113,29 @@ export async function POST(request) {
     console.log("Verifying OTP for email:", email)
     console.log("OTP store keys:", Array.from(otpStore.keys()))
     console.log("OTP store size:", otpStore.size)
-    console.log("OTP store entries:", Array.from(otpStore.entries()).map(([e, d]) => ({ email: e, otp: d.otp, expiresAt: new Date(d.expiresAt).toISOString() })))
+    console.log(
+      "OTP store entries:",
+      Array.from(otpStore.entries()).map(([e, d]) => ({
+        key: e,
+        otp: d.otp,
+        expiresAt: new Date(d.expiresAt).toISOString(),
+      })),
+    )
 
     // Verify OTP
-    const storedData = otpStore.get(email)
+    const storedData = otpStore.get(otpKey)
     
     console.log("Stored data for email:", storedData ? { otp: storedData.otp, expiresAt: new Date(storedData.expiresAt).toISOString(), isExpired: storedData.expiresAt < Date.now() } : "NOT FOUND")
     
     if (!storedData) {
-      console.error("OTP not found for email:", email)
-      console.error("Available emails in store:", Array.from(otpStore.keys()))
+      console.error("OTP not found for key:", otpKey)
+      console.error("Available keys in store:", Array.from(otpStore.keys()))
       return NextResponse.json(
         { 
           error: "OTP not found. Please request a new OTP.",
           debug: process.env.NODE_ENV === "development" ? {
-            lookupEmail: email,
-            availableEmails: Array.from(otpStore.keys())
+            lookupKey: otpKey,
+            availableKeys: Array.from(otpStore.keys())
           } : undefined
         },
         { status: 400 }
@@ -96,7 +143,7 @@ export async function POST(request) {
     }
 
     if (storedData.expiresAt < Date.now()) {
-      otpStore.delete(email)
+      otpStore.delete(otpKey)
       return NextResponse.json(
         { error: "OTP has expired. Please request a new OTP." },
         { status: 400 }
@@ -120,8 +167,13 @@ export async function POST(request) {
       // Get all bookings for the same room type
       const q = query(bookingsRef, where("roomType", "==", trimmedRoomType))
       const querySnapshot = await getDocs(q)
+      const tenantBookings = querySnapshot.docs.filter((d) =>
+        bookingBelongsToTenant(d.data(), ownerUid, legacyUnscopedUid),
+      )
       
-      console.log(`Verifying OTP - Found ${querySnapshot.size} bookings for room type: "${trimmedRoomType}"`)
+      console.log(
+        `Verifying OTP - Found ${tenantBookings.length} tenant-scoped bookings for room type: "${trimmedRoomType}"`,
+      )
       
       // Parse dates using helper function
       const newCheckIn = parseDate(checkIn.trim())
@@ -138,11 +190,11 @@ export async function POST(request) {
         roomType: roomType.trim(),
         newCheckIn: checkIn.trim(),
         newCheckOut: checkOut.trim(),
-        totalBookings: querySnapshot.size,
+        totalBookings: tenantBookings.length,
       })
       
       // Check for date overlaps (only for APPROVED bookings)
-      const hasConflict = querySnapshot.docs.some((doc) => {
+      const hasConflict = tenantBookings.some((doc) => {
         const existingBooking = doc.data()
         // Trim status to handle "Approved " with trailing space
         const status = existingBooking.status?.trim() || existingBooking.status
@@ -223,17 +275,20 @@ export async function POST(request) {
       
       // Get all rooms for flexible matching
       const allRoomsSnapshot = await getDocs(roomsRef)
+      const tenantRoomDocs = allRoomsSnapshot.docs.filter((d) =>
+        roomBelongsToTenant(d.data(), ownerUid, legacyUnscopedUid),
+      )
       
-      if (!allRoomsSnapshot.empty) {
+      if (tenantRoomDocs.length) {
         // Try exact match by name first (case-insensitive)
-        let matchedRoom = allRoomsSnapshot.docs.find(doc => {
+        let matchedRoom = tenantRoomDocs.find(doc => {
           const data = doc.data()
           return data.name?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
         })
         
         // If no match by name, try by type
         if (!matchedRoom) {
-          matchedRoom = allRoomsSnapshot.docs.find(doc => {
+          matchedRoom = tenantRoomDocs.find(doc => {
             const data = doc.data()
             return data.type?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
           })
@@ -241,7 +296,7 @@ export async function POST(request) {
         
         // If still no match, try partial match
         if (!matchedRoom) {
-          matchedRoom = allRoomsSnapshot.docs.find(doc => {
+          matchedRoom = tenantRoomDocs.find(doc => {
             const data = doc.data()
             const roomTypeLower = data.type?.trim().toLowerCase() || ""
             const roomNameLower = data.name?.trim().toLowerCase() || ""
@@ -290,9 +345,17 @@ export async function POST(request) {
       roomType: roomType.trim(),
       specialRequests: specialRequests ? specialRequests.trim() : "",
       status: "Pending", // Admin can approve later
+      ...(ownerUid
+        ? {
+            paymentMethod: "gcash_qr",
+            proofOfPaymentUrl: String(proofOfPaymentUrl || "").trim(),
+            validIdUrl: String(validIdUrl || "").trim(),
+          }
+        : {}),
       pricePerNight: pricePerNight > 0 ? pricePerNight : null, // Store price if found
       createdAt: serverTimestamp(),
       verifiedAt: serverTimestamp(),
+      ...(ownerUid ? { ownerUid } : {}),
     }
 
     // Validate guests is a valid number
@@ -319,20 +382,24 @@ export async function POST(request) {
       console.log("Booking saved successfully with ID:", docRef.id)
 
       // Remove used OTP
-      otpStore.delete(email)
+      otpStore.delete(otpKey)
 
-      // Send email notification to admin
+      const emailBrandName = await resolveEmailBrandName(ownerUid)
+
+      // Notify resort (same mailbox as OTP — Guest emails + FIREBASE_SERVICE_ACCOUNT_JSON)
       try {
-        const adminEmail = process.env.ADMIN_EMAIL || process.env.EMAIL_USER
-        if (adminEmail) {
-          const transporter = nodemailer.createTransport({
-            service: "gmail",
-            auth: {
-              user: process.env.EMAIL_USER,
-              pass: process.env.EMAIL_PASSWORD || process.env.EMAIL_PASS,
-            },
+        const { resolveCentralEnvMail, resolveAdminInboxEmail, getResortAdminMailDisplayName } =
+          await import("@/lib/central-env-mail")
+        const smtp = await resolveCentralEnvMail()
+        const adminEmail =
+          smtp.ok &&
+          resolveAdminInboxEmail({
+            brandingEmail: smtp.brandingEmail,
+            replyTo: smtp.replyTo,
+            smtpUser: smtp.user,
           })
 
+        if (smtp.ok && adminEmail) {
           const formatDate = (dateString) => {
             if (!dateString) return "N/A"
             try {
@@ -343,90 +410,106 @@ export async function POST(request) {
             }
           }
 
+          const brandEsc = escapeEmailHtml(emailBrandName)
+          const adminRows = [
+            { label: "Booking reference", value: escapeEmailHtml(docRef.id) },
+            { label: "Guest name", value: escapeEmailHtml(name) },
+            { label: "Email", value: escapeEmailHtml(email) },
+            { label: "Phone", value: escapeEmailHtml(phone) },
+            { label: "Room", value: escapeEmailHtml(roomType) },
+            { label: "Check-in", value: escapeEmailHtml(formatDate(checkIn)) },
+            { label: "Check-out", value: escapeEmailHtml(formatDate(checkOut)) },
+            { label: "Guests", value: escapeEmailHtml(String(guests)) },
+            ...(specialRequests
+              ? [{ label: "Special requests", value: escapeEmailHtml(specialRequests) }]
+              : []),
+            { label: "Status", value: `<strong style="color:#b45309;">Pending review</strong>` },
+          ]
+          const adminMainHtml = `
+            ${formalHeading("New reservation request", 1)}
+            ${formalParagraph(
+              `A new reservation request has been submitted for <strong style="color:#18181b;">${brandEsc}</strong> and requires your attention.`,
+            )}
+            ${formalDetailTable(adminRows)}
+            ${formalParagraph(
+              `Please review this request in your administration dashboard and approve or decline it when convenient.`,
+            )}
+            ${formalParagraph(
+              `This message was generated automatically when the guest completed verification.`,
+              "font-size:13px;color:#52525b;margin-bottom:0;",
+            )}
+          `
           const mailOptions = {
-            from: `"LuxeStay Booking System" <${process.env.EMAIL_USER}>`,
+            from: `"${getResortAdminMailDisplayName()}" <${smtp.user}>`,
             to: adminEmail,
-            subject: `🔔 New Booking Request - ${name}`,
-            html: `
-              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
-                <div style="background-color: #ffffff; border-radius: 8px; padding: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                  <div style="text-align: center; margin-bottom: 30px;">
-                    <h1 style="color: #059669; font-size: 28px; margin: 0;">📋 New Booking Request</h1>
-                  </div>
-                  
-                  <p style="color: #374151; font-size: 16px; line-height: 1.6;">
-                    A new booking has been submitted and is pending your approval.
-                  </p>
-                  
-                  <div style="background-color: #f0fdf4; border-left: 4px solid #059669; padding: 20px; margin: 20px 0; border-radius: 4px;">
-                    <h2 style="color: #059669; margin-top: 0; font-size: 18px;">Booking Details</h2>
-                    <table style="width: 100%; color: #374151;">
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold; width: 40%;">Booking ID:</td>
-                        <td style="padding: 8px 0;">${docRef.id}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold;">Guest Name:</td>
-                        <td style="padding: 8px 0;">${name}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold;">Email:</td>
-                        <td style="padding: 8px 0;">${email}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold;">Phone:</td>
-                        <td style="padding: 8px 0;">${phone}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold;">Room Type:</td>
-                        <td style="padding: 8px 0;">${roomType}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold;">Check-in:</td>
-                        <td style="padding: 8px 0;">${formatDate(checkIn)}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold;">Check-out:</td>
-                        <td style="padding: 8px 0;">${formatDate(checkOut)}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold;">Guests:</td>
-                        <td style="padding: 8px 0;">${guests}</td>
-                      </tr>
-                      ${specialRequests ? `
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold; vertical-align: top;">Special Requests:</td>
-                        <td style="padding: 8px 0;">${specialRequests}</td>
-                      </tr>
-                      ` : ""}
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold;">Status:</td>
-                        <td style="padding: 8px 0;"><strong style="color: #f59e0b;">Pending</strong></td>
-                      </tr>
-                    </table>
-                  </div>
-                  
-                  <div style="text-align: center; margin: 30px 0;">
-                    <p style="color: #374151; font-size: 14px; line-height: 1.6;">
-                      Please review and approve this booking in the admin dashboard.
-                    </p>
-                  </div>
-                  
-                  <p style="color: #374151; font-size: 14px; line-height: 1.6; margin-top: 30px; border-top: 1px solid #e5e7eb; padding-top: 20px;">
-                    This is an automated notification from the LuxeStay Booking System.
-                  </p>
-                </div>
-              </div>
-            `,
-            text: `New Booking Request\n\nBooking ID: ${docRef.id}\nGuest Name: ${name}\nEmail: ${email}\nPhone: ${phone}\nRoom Type: ${roomType}\nCheck-in: ${formatDate(checkIn)}\nCheck-out: ${formatDate(checkOut)}\nGuests: ${guests}${specialRequests ? `\nSpecial Requests: ${specialRequests}` : ""}\nStatus: Pending\n\nPlease review and approve this booking in the admin dashboard.`,
+            replyTo: smtp.replyTo,
+            subject: `New reservation request — ${emailBrandName}`,
+            html: formalEmailShell({
+              mainHtml: adminMainHtml,
+              footerHtml: defaultBookingFooter(brandEsc),
+              accentColor: "#334155",
+            }),
+            text: `New reservation request — ${emailBrandName}\n\nBooking reference: ${docRef.id}\nGuest name: ${name}\nEmail: ${email}\nPhone: ${phone}\nRoom: ${roomType}\nCheck-in: ${formatDate(checkIn)}\nCheck-out: ${formatDate(checkOut)}\nGuests: ${guests}${specialRequests ? `\nSpecial requests: ${specialRequests}` : ""}\nStatus: Pending review\n\nPlease review this request in your administration dashboard.\n\n— Automated notification`,
           }
 
-          await transporter.sendMail(mailOptions)
+          await smtp.transporter.sendMail(mailOptions)
           console.log("Admin notification email sent successfully")
         }
       } catch (emailError) {
         console.error("Error sending admin notification email:", emailError)
         // Don't fail the booking if email fails
+      }
+
+      // Guest confirmation: pending admin approval (no payment link)
+      try {
+        const { resolveCentralEnvMail } = await import("@/lib/central-env-mail")
+        const smtp = await resolveCentralEnvMail()
+        if (smtp.ok) {
+          const formatDate = (dateString) => {
+            if (!dateString) return "N/A"
+            try {
+              const date = new Date(dateString + "T00:00:00")
+              return date.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+            } catch {
+              return dateString
+            }
+          }
+          const guestNameEsc = escapeEmailHtml(name || "Guest")
+          const guestBrandEsc = escapeEmailHtml(emailBrandName)
+          const guestRows = [
+            { label: "Booking reference", value: escapeEmailHtml(docRef.id) },
+            { label: "Room", value: escapeEmailHtml(roomType) },
+            { label: "Check-in", value: escapeEmailHtml(formatDate(checkIn)) },
+            { label: "Check-out", value: escapeEmailHtml(formatDate(checkOut)) },
+          ]
+          const guestMainHtml = `
+            ${formalHeading("Reservation request received", 1)}
+            ${formalParagraph(`Dear ${guestNameEsc},`)}
+            ${formalParagraph(
+              `Thank you for your reservation request at <strong style="color:#18181b;">${guestBrandEsc}</strong>. Your submission has been received and is now subject to confirmation by the property.`,
+            )}
+            ${formalDetailTable(guestRows)}
+            ${formalParagraph(
+              `You will receive a separate message once your request has been reviewed. No further action is required from you at this time.`,
+            )}
+            ${formalParagraph(`Respectfully,<br/><strong style="color:#18181b;">${guestBrandEsc}</strong>`, "margin-top:28px;margin-bottom:0;")}
+          `
+          await smtp.transporter.sendMail({
+            from: `"${getResortAdminMailDisplayName()}" <${smtp.user}>`,
+            to: email,
+            replyTo: smtp.replyTo,
+            subject: `Reservation request received — ${emailBrandName}`,
+            html: formalEmailShell({
+              mainHtml: guestMainHtml,
+              footerHtml: defaultBookingFooter(guestBrandEsc),
+              accentColor: "#334155",
+            }),
+            text: `Reservation request received — ${emailBrandName}\n\nDear ${name || "Guest"},\n\nThank you for your reservation request. Your submission is pending confirmation.\n\nBooking reference: ${docRef.id}\nRoom: ${roomType}\nCheck-in: ${formatDate(checkIn)}\nCheck-out: ${formatDate(checkOut)}\n\nYou will be notified by email when your request has been reviewed.\n\n— ${emailBrandName}`,
+          })
+          console.log("Guest confirmation email sent successfully")
+        }
+      } catch (guestMailError) {
+        console.error("Error sending guest confirmation email:", guestMailError)
       }
 
       return NextResponse.json({

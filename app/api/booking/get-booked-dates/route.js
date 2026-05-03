@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/firebase"
 import { collection, query, where, getDocs } from "firebase/firestore"
+import {
+  bookingBelongsToTenant,
+  getLegacyUnscopedRoomsOwnerUidFromDb,
+  normalizeOwnerUid,
+} from "@/lib/booking-tenant"
 
 // Helper function to parse date consistently
 function parseDate(dateValue) {
@@ -24,7 +29,9 @@ function parseDate(dateValue) {
 
 export async function POST(request) {
   try {
-    const { roomType } = await request.json()
+    const { roomType, ownerUid: rawOwnerUid } = await request.json()
+    const ownerUid = normalizeOwnerUid(rawOwnerUid)
+    const legacyUnscopedUid = await getLegacyUnscopedRoomsOwnerUidFromDb(db)
 
     if (!roomType) {
       return NextResponse.json(
@@ -44,6 +51,9 @@ export async function POST(request) {
     
     querySnapshot.docs.forEach((doc) => {
       const booking = doc.data()
+      if (!bookingBelongsToTenant(booking, ownerUid, legacyUnscopedUid)) {
+        return
+      }
       // Trim status to handle "Approved " with trailing space
       const status = booking.status?.trim() || booking.status
       

@@ -19,7 +19,7 @@ A modern, full-featured resort booking management system built with Next.js, Fir
 
 - **Framework**: Next.js 14
 - **Database**: Firebase Firestore
-- **Authentication**: Firebase Admin
+- **Authentication**: Firebase Auth
 - **Payment**: PayMongo API
 - **Email**: Nodemailer (Gmail)
 - **UI Components**: Custom components with Tailwind CSS
@@ -59,13 +59,13 @@ NEXT_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
 NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your_storage_bucket
 NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
 NEXT_PUBLIC_FIREBASE_APP_ID=your_app_id
-FIREBASE_ADMIN_PROJECT_ID=your_project_id
-FIREBASE_ADMIN_CLIENT_EMAIL=your_client_email
-FIREBASE_ADMIN_PRIVATE_KEY=your_private_key
+# One Gmail for all automated mail (OTP, booking status, contact, feedback, super-admin approve/reject)
+EMAIL_USER=your_sender@gmail.com
+EMAIL_PASSWORD=your_16_char_app_password
+# (alias) EMAIL_PASS=...
 
-# Email (Gmail)
-EMAIL_USER=your_email@gmail.com
-EMAIL_PASSWORD=your_app_password
+# Optional: Reply-To / internal copies (defaults to EMAIL_USER)
+# EMAIL_REPLY_TO=frontdesk@example.com
 ADMIN_EMAIL=admin@example.com
 
 # PayMongo

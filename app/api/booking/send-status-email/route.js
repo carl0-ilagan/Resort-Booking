@@ -1,40 +1,23 @@
 import { NextResponse } from "next/server"
-import nodemailer from "nodemailer"
 import { db } from "@/lib/firebase"
 import { collection, query, where, getDocs } from "firebase/firestore"
-
-// Create transporter function (reuse from send-otp)
-function createTransporter() {
-  const emailUser = process.env.EMAIL_USER
-  const emailPassword = process.env.EMAIL_PASSWORD || process.env.EMAIL_PASS
-
-  if (!emailUser || !emailPassword) {
-    throw new Error("Email credentials not configured")
-  }
-
-  try {
-    return nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: emailUser,
-        pass: emailPassword,
-      },
-    })
-  } catch (error) {
-    return nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false,
-      auth: {
-        user: emailUser,
-        pass: emailPassword,
-      },
-      tls: {
-        rejectUnauthorized: false,
-      },
-    })
-  }
-}
+import { resolveCentralEnvMail, getResortAdminMailDisplayName } from "@/lib/central-env-mail"
+import { resolveEmailBrandName } from "@/lib/resort-mail-branding"
+import {
+  escapeEmailHtml,
+  formalEmailShell,
+  formalHeading,
+  formalParagraph,
+  formalDetailTable,
+  formalNoticeBox,
+  defaultBookingFooter,
+} from "@/lib/booking-email-layout"
+import {
+  getLegacyUnscopedRoomsOwnerUidFromDb,
+  normalizeOwnerUid,
+  roomBelongsToTenant,
+} from "@/lib/booking-tenant"
+// Payment links are no longer generated for guest checkout.
 
 // Helper function to calculate number of nights
 function calculateNights(checkIn, checkOut) {
@@ -84,13 +67,17 @@ function calculateNights(checkIn, checkOut) {
 }
 
 // Helper function to fetch room data (name and price) from Firestore
-async function getRoomData(roomType) {
+async function getRoomData(roomType, ownerUid = null, legacyUnscopedUid = null) {
   try {
+    const tenantUid = normalizeOwnerUid(ownerUid)
     const roomsRef = collection(db, "rooms")
     const allRoomsSnapshot = await getDocs(roomsRef)
+    const tenantDocs = allRoomsSnapshot.docs.filter((d) =>
+      roomBelongsToTenant(d.data(), tenantUid, legacyUnscopedUid),
+    )
     
-    if (allRoomsSnapshot.empty) {
-      console.warn("No rooms found in Firestore")
+    if (!tenantDocs.length) {
+      console.warn("No rooms found in Firestore for tenant scope")
       return { name: null, price: 0 }
     }
 
@@ -100,21 +87,21 @@ async function getRoomData(roomType) {
       console.log(`Searching for room: "${trimmedRoomType}"`)
       
       // Log all available room types and names for debugging
-      const availableRooms = allRoomsSnapshot.docs.map(doc => {
+      const availableRooms = tenantDocs.map(doc => {
         const data = doc.data()
         return { id: doc.id, type: data.type, name: data.name, price: data.price }
       })
       console.log("Available rooms:", JSON.stringify(availableRooms, null, 2))
 
       // Try exact match by type (case-insensitive)
-      let matchedRoom = allRoomsSnapshot.docs.find(doc => {
+      let matchedRoom = tenantDocs.find(doc => {
         const data = doc.data()
         return data.type?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
       })
 
       // If no match by type, try exact match by name (case-insensitive)
       if (!matchedRoom) {
-        matchedRoom = allRoomsSnapshot.docs.find(doc => {
+        matchedRoom = tenantDocs.find(doc => {
           const data = doc.data()
           return data.name?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
         })
@@ -122,7 +109,7 @@ async function getRoomData(roomType) {
 
       // If still no match, try partial match (contains)
       if (!matchedRoom) {
-        matchedRoom = allRoomsSnapshot.docs.find(doc => {
+        matchedRoom = tenantDocs.find(doc => {
           const data = doc.data()
           const roomTypeLower = data.type?.trim().toLowerCase() || ""
           const roomNameLower = data.name?.trim().toLowerCase() || ""
@@ -150,7 +137,7 @@ async function getRoomData(roomType) {
     
     // If roomType is empty/WALA, try to get first available room or return null
     console.log("⚠️ roomType is empty or 'WALA', trying to find any available room...")
-    const availableRoom = allRoomsSnapshot.docs.find(doc => {
+    const availableRoom = tenantDocs.find(doc => {
       const data = doc.data()
       const availability = data.availability?.trim() || data.availability
       return !availability || availability === "Available"
@@ -178,14 +165,26 @@ async function getRoomData(roomType) {
 }
 
 // Helper function to fetch room price from Firestore (backward compatibility)
-async function getRoomPrice(roomType) {
-  const roomData = await getRoomData(roomType)
+async function getRoomPrice(roomType, ownerUid = null, legacyUnscopedUid = null) {
+  const roomData = await getRoomData(roomType, ownerUid, legacyUnscopedUid)
   return roomData.price
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
 }
 
 export async function POST(request) {
   try {
-    let { email, name, roomType, checkIn, checkOut, status, bookingId } = await request.json()
+    const legacyUnscopedUid = await getLegacyUnscopedRoomsOwnerUidFromDb(db)
+    let { email, name, roomType, checkIn, checkOut, status, bookingId, reason, ownerUid: rawBodyOwnerUid } =
+      await request.json()
+    let bookingOwnerUid = null
+    const bodyOwnerUid = normalizeOwnerUid(rawBodyOwnerUid)
 
     if (!email || !status) {
       return NextResponse.json({ error: "Email and status are required" }, { status: 400 })
@@ -201,6 +200,7 @@ export async function POST(request) {
         const bookingDoc = await getDoc(bookingRef)
         if (bookingDoc.exists()) {
           const bookingData = bookingDoc.data()
+          bookingOwnerUid = normalizeOwnerUid(bookingData.ownerUid)
           // Use booking document as source of truth - prioritize booking document data
           const fetchedRoomType = bookingData.roomType?.trim() || ""
           roomType = fetchedRoomType || roomType || ""
@@ -242,17 +242,20 @@ export async function POST(request) {
       console.warn("⚠️ No bookingId provided - cannot fetch booking document from Firestore")
     }
 
-    // Check if email credentials are configured
-    const emailPassword = process.env.EMAIL_PASSWORD || process.env.EMAIL_PASS
-    if (!process.env.EMAIL_USER || !emailPassword) {
-      console.error("Email credentials not configured")
+    const central = await resolveCentralEnvMail()
+    if (!central.ok) {
+      console.error("send-status-email:", central.code, central.message)
       return NextResponse.json(
-        { error: "Email service not configured" },
-        { status: 500 }
+        {
+          error: "Email service not configured",
+          hint: central.message,
+        },
+        { status: 500 },
       )
     }
 
-    const transporter = createTransporter()
+    const { transporter, user: fromUser, replyTo: centralReplyTo } = central
+    const mailSource = "env"
 
     // Format dates
     const formatDate = (dateString) => {
@@ -274,6 +277,7 @@ export async function POST(request) {
     let paymentLink = null
     let displayRoomName = roomType || "N/A"
     let paymentErrorDetails = null
+    let paymentProviderLabel = "PayMongo"
 
     // Normalize roomType - trim and validate
     if (roomType) {
@@ -302,6 +306,7 @@ export async function POST(request) {
           const bookingDoc = await getDoc(bookingRef)
           if (bookingDoc.exists()) {
             const bookingData = bookingDoc.data()
+            bookingOwnerUid = bookingOwnerUid || normalizeOwnerUid(bookingData.ownerUid)
             // Check if price was stored in booking
             if (bookingData.pricePerNight || bookingData.totalPrice) {
               pricePerNight = Number(bookingData.pricePerNight) || (Number(bookingData.totalPrice) / numberOfNights)
@@ -316,7 +321,7 @@ export async function POST(request) {
       // Get room data (name and price) from room lookup - this will handle WALA/empty roomType
       if (pricePerNight === 0 || !roomType || roomType === "") {
         console.log(`Getting room data: roomType="${roomType || 'EMPTY'}", checkIn="${checkIn}", checkOut="${checkOut}", nights=${numberOfNights}`)
-        const roomData = await getRoomData(roomType)
+        const roomData = await getRoomData(roomType, bookingOwnerUid, legacyUnscopedUid)
         if (roomData.name) {
           displayRoomName = roomData.name
           // Update booking document with correct room name if we found one
@@ -339,7 +344,7 @@ export async function POST(request) {
         }
       } else if (roomType && roomType !== "") {
         // If we have roomType, get the actual room name for display
-        const roomData = await getRoomData(roomType)
+        const roomData = await getRoomData(roomType, bookingOwnerUid, legacyUnscopedUid)
         if (roomData.name) {
           displayRoomName = roomData.name
         }
@@ -353,139 +358,7 @@ export async function POST(request) {
         console.warn(`Cannot calculate total: pricePerNight=${pricePerNight}, numberOfNights=${numberOfNights}, roomType="${roomType || 'EMPTY'}"`)
       }
       
-      // Create PayMongo payment link if amount is valid
-      if (totalAmount > 0) {
-        console.log("Creating PayMongo payment link...")
-        console.log("Payment details:", {
-          totalAmount,
-          pricePerNight,
-          numberOfNights,
-          bookingId,
-          displayRoomName,
-          roomType
-        })
-        
-        try {
-          // Create payment link using PayMongo API
-          const paymongoSecretKey = process.env.PAYMONGO_SECRET_KEY
-          
-          // Check if secret key exists and has correct format
-          if (!paymongoSecretKey) {
-            console.error("❌ PAYMONGO_SECRET_KEY is not set in environment variables")
-            console.error("⚠️ Please add PAYMONGO_SECRET_KEY (starts with 'sk_') to your .env.local file")
-            paymentErrorDetails = {
-              message: "PAYMONGO_SECRET_KEY is not set"
-            }
-          } else if (!paymongoSecretKey.startsWith("sk_")) {
-            console.error("❌ PAYMONGO_SECRET_KEY format is incorrect")
-            console.error("⚠️ Secret key should start with 'sk_' (you might have added the public key instead)")
-            console.error("⚠️ Public keys start with 'pk_', Secret keys start with 'sk_'")
-            paymentErrorDetails = {
-              message: "PAYMONGO_SECRET_KEY format is incorrect (should start with 'sk_')"
-            }
-          } else {
-            console.log("✅ PayMongo secret key found (format looks correct)")
-            
-            const amountInCentavos = Math.round(totalAmount * 100)
-            const authString = Buffer.from(paymongoSecretKey + ":").toString("base64")
-            
-            const requestBody = {
-              data: {
-                attributes: {
-                  amount: amountInCentavos,
-                  currency: "PHP",
-                  description: `Booking Payment - ${displayRoomName || roomType || "Room"} (${checkIn} to ${checkOut})`,
-                  remarks: `Booking ID: ${bookingId}`,
-                },
-              },
-            }
-            
-            console.log("Sending request to PayMongo API...")
-            console.log("Request amount:", amountInCentavos, "centavos (₱" + totalAmount + ")")
-            
-            const paymongoResponse = await fetch("https://api.paymongo.com/v1/links", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Basic ${authString}`,
-              },
-              body: JSON.stringify(requestBody),
-            })
-            
-            const paymongoData = await paymongoResponse.json()
-            
-            console.log("PayMongo API Response Status:", paymongoResponse.status, paymongoResponse.statusText)
-            console.log("PayMongo API Response:", JSON.stringify(paymongoData, null, 2))
-            
-            if (paymongoResponse.ok && paymongoData.data?.attributes?.checkout_url) {
-              paymentLink = paymongoData.data.attributes.checkout_url
-              const paymentLinkId = paymongoData.data?.id
-              console.log("✅ Payment link created successfully!")
-              console.log("Payment Link:", paymentLink)
-              console.log("Link ID:", paymentLinkId)
-              
-              // Store payment link ID in booking
-              if (bookingId && paymentLinkId) {
-                try {
-                  const { doc, updateDoc } = await import("firebase/firestore")
-                  const bookingRef = doc(db, "guestbooking", bookingId)
-                  await updateDoc(bookingRef, {
-                    paymentLinkId: paymentLinkId,
-                    paymentLink: paymentLink,
-                  })
-                  console.log(`✅ Payment link ID stored for booking ${bookingId}`)
-                } catch (updateError) {
-                  console.error("❌ Error storing payment link ID:", updateError)
-                  // Continue even if storing fails
-                }
-              }
-            } else {
-              console.error("❌ Failed to create payment link")
-              const errors = []
-              if (paymongoData.errors && paymongoData.errors.length > 0) {
-                paymongoData.errors.forEach((error, index) => {
-                  const errorMsg = error.detail || error.message || JSON.stringify(error)
-                  errors.push(errorMsg)
-                  console.error(`Error ${index + 1}:`, errorMsg)
-                })
-              } else {
-                const unknownError = "Unknown error - PayMongo response: " + JSON.stringify(paymongoData, null, 2)
-                errors.push(unknownError)
-                console.error(unknownError)
-              }
-              
-              // Store error details for response
-              paymentErrorDetails = {
-                status: paymongoResponse.status,
-                statusText: paymongoResponse.statusText,
-                errors: errors,
-                response: paymongoData
-              }
-              
-              // Log helpful debugging info
-              if (paymongoResponse.status === 401) {
-                console.error("⚠️ Authentication failed - Check if PAYMONGO_SECRET_KEY is correct")
-                paymentErrorDetails.message = "Authentication failed - Check if PAYMONGO_SECRET_KEY is correct"
-              } else if (paymongoResponse.status === 400) {
-                console.error("⚠️ Bad request - Check if amount and other parameters are valid")
-                paymentErrorDetails.message = "Bad request - Check if amount and other parameters are valid"
-              }
-            }
-          }
-        } catch (paymentError) {
-          console.error("❌ Exception while creating payment link:", paymentError)
-          console.error("Error message:", paymentError.message)
-          console.error("Error stack:", paymentError.stack)
-          paymentErrorDetails = {
-            message: paymentError.message,
-            stack: paymentError.stack,
-            type: "exception"
-          }
-          // Continue without payment link - booking is still approved
-        }
-      } else {
-        console.warn(`⚠️ Cannot create payment link: totalAmount is ${totalAmount} (pricePerNight: ${pricePerNight}, nights: ${numberOfNights})`)
-      }
+      // Payment link generation removed (GCash QR + manual verification).
     } else {
       console.warn("Cannot create payment link: missing required fields", {
         status,
@@ -495,151 +368,112 @@ export async function POST(request) {
       })
     }
 
+    const brandName = await resolveEmailBrandName(bookingOwnerUid || bodyOwnerUid)
+    const brandNameHtml = escapeHtml(brandName)
+
     // Email content based on status
     let subject, htmlContent, textContent
 
+    const guestNameEsc = escapeEmailHtml(name || "Valued Guest")
+    const brandFooterEsc = escapeEmailHtml(brandName)
+
     if (status === "Approved") {
-      subject = "🎉 Your Booking Has Been Approved - LuxeStay"
-      htmlContent = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
-          <div style="background-color: #ffffff; border-radius: 8px; padding: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-            <div style="text-align: center; margin-bottom: 30px;">
-              <h1 style="color: #059669; font-size: 28px; margin: 0;">✅ Booking Approved!</h1>
-            </div>
-            
-            <p style="color: #374151; font-size: 16px; line-height: 1.6;">Dear ${name || "Valued Guest"},</p>
-            
-            <p style="color: #374151; font-size: 16px; line-height: 1.6;">
-              We are delighted to inform you that your booking has been <strong style="color: #059669;">approved</strong>!
-            </p>
-            
-            <div style="background-color: #f0fdf4; border-left: 4px solid #059669; padding: 20px; margin: 20px 0; border-radius: 4px;">
-              <h2 style="color: #059669; margin-top: 0; font-size: 18px;">Booking Details</h2>
-              <ul style="list-style: none; padding: 0; margin: 0; color: #374151;">
-                <li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-                  <strong>Room:</strong> ${displayRoomName && displayRoomName !== "N/A" ? displayRoomName : "N/A - Please contact us"}
-                </li>
-                <li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-                  <strong>Check-in:</strong> ${formattedCheckIn}
-                </li>
-                <li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-                  <strong>Check-out:</strong> ${formattedCheckOut}
-                </li>
-                <li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-                  <strong>Nights:</strong> ${numberOfNights} night${numberOfNights !== 1 ? "s" : ""}
-                </li>
-                ${totalAmount > 0 ? `
-                <li style="padding: 8px 0;">
-                  <strong>Total:</strong> <span style="font-size: 20px; color: #059669; font-weight: bold;">₱${totalAmount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </li>
-                ` : `
-                <li style="padding: 8px 0; color: #dc2626;">
-                  <strong>Total:</strong> <span style="font-size: 16px; color: #dc2626;">Price not available. Please contact us for payment details.</span>
-                </li>
-                `}
-              </ul>
-            </div>
-            
-            ${paymentLink ? `
-            <div style="text-align: center; margin: 30px 0; padding: 25px; background-color: #f0fdf4; border: 2px solid #059669; border-radius: 8px;">
-              <p style="color: #374151; font-size: 16px; line-height: 1.6; margin-bottom: 20px; font-weight: 600;">
-                💳 Click the button below to pay via GCash or other payment methods:
-              </p>
-              <a href="${paymentLink}" target="_blank" style="display: inline-block; padding: 16px 40px; background: linear-gradient(135deg, #00AAFF 0%, #0088CC 100%); color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 18px; box-shadow: 0 4px 6px rgba(0, 170, 255, 0.3); transition: all 0.3s ease;">Pay Now - ₱${totalAmount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</a>
-              <p style="color: #6b7280; font-size: 12px; margin-top: 15px; margin-bottom: 0;">
-                Secure payment powered by PayMongo
-              </p>
-            </div>
-            ` : totalAmount > 0 ? `
-            <div style="text-align: center; margin: 30px 0; padding: 20px; background-color: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px;">
-              <p style="color: #92400e; font-size: 14px; line-height: 1.6; margin: 0; font-weight: 600;">
-                ⏳ Payment link is being generated. Please contact us if you don't receive it shortly.
-              </p>
-            </div>
-            ` : ""}
-            
-            <p style="color: #374151; font-size: 16px; line-height: 1.6;">
-              We look forward to welcoming you! If you have any questions or special requests, please don't hesitate to contact us.
-            </p>
-            
-            <p style="color: #374151; font-size: 16px; line-height: 1.6; margin-top: 30px;">
-              Best regards,<br>
-              <strong>The LuxeStay Team</strong>
-            </p>
-          </div>
-        </div>
+      subject = `Reservation confirmed — ${brandName}`
+      const roomLabel =
+        displayRoomName && displayRoomName !== "N/A"
+          ? escapeEmailHtml(displayRoomName)
+          : "Please contact the property for accommodation details."
+      const totalCell =
+        totalAmount > 0
+          ? `<strong style="color:#0f172a;">₱${totalAmount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>`
+          : `<span style="color:#52525b;">Total not listed — please contact the property.</span>`
+      const approvedRows = [
+        { label: "Accommodation", value: roomLabel },
+        { label: "Check-in", value: escapeEmailHtml(formattedCheckIn) },
+        { label: "Check-out", value: escapeEmailHtml(formattedCheckOut) },
+        {
+          label: "Duration",
+          value: escapeEmailHtml(`${numberOfNights} night${numberOfNights !== 1 ? "s" : ""}`),
+        },
+        { label: "Amount due (reference)", value: totalCell },
+      ]
+      const paymentNote = formalNoticeBox(
+        `<p style="margin:0;font-size:14px;line-height:1.6;color:#334155;">Payment records are verified by the property. If you submitted proof of payment, please await separate confirmation that your payment has been received and applied.</p>`,
+        { borderColor: "#94a3b8", bg: "#f8fafc" },
+      )
+      const approvedMain = `
+        ${formalHeading("Reservation confirmed", 1)}
+        ${formalParagraph(`Dear ${guestNameEsc},`)}
+        ${formalParagraph(
+          `We are pleased to confirm that your reservation request at <strong style="color:#18181b;">${brandNameHtml}</strong> has been <strong style="color:#18181b;">accepted</strong>. Please review the particulars below.`,
+        )}
+        ${formalDetailTable(approvedRows)}
+        ${paymentNote}
+        ${formalParagraph(
+          `Should you require any amendment or have further questions, please reach out to the property directly using its published contact information.`,
+        )}
+        ${formalParagraph(`Yours sincerely,<br/><strong style="color:#18181b;">${brandNameHtml}</strong>`, "margin-top:28px;margin-bottom:0;")}
       `
-      textContent = `Your booking has been approved!\n\nBooking Details:\n- Room: ${displayRoomName || "N/A"}\n- Check-in: ${formattedCheckIn}\n- Check-out: ${formattedCheckOut}${totalAmount > 0 ? `\n- Nights: ${numberOfNights} night${numberOfNights !== 1 ? "s" : ""}\n- Total: ₱${totalAmount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ""}${paymentLink ? `\n\n💳 Payment Link: ${paymentLink}\n\nClick the link above to pay via GCash or other payment methods.` : ""}\n\nWe look forward to welcoming you!`
+      htmlContent = formalEmailShell({
+        mainHtml: approvedMain,
+        footerHtml: defaultBookingFooter(brandFooterEsc),
+        accentColor: "#1e3a5f",
+      })
+      textContent = `Reservation confirmed — ${brandName}\n\nDear ${name || "Valued Guest"},\n\nYour reservation has been accepted.\n\nAccommodation: ${displayRoomName || "See property"}\nCheck-in: ${formattedCheckIn}\nCheck-out: ${formattedCheckOut}\nNights: ${numberOfNights}${totalAmount > 0 ? `\nTotal (reference): ₱${totalAmount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ""}\n\nPayment is verified by the property; await confirmation if applicable.\n\n— ${brandName}`
     } else if (status === "Cancelled" || status === "Declined") {
-      subject = "Booking Update - LuxeStay"
-      htmlContent = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
-          <div style="background-color: #ffffff; border-radius: 8px; padding: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-            <div style="text-align: center; margin-bottom: 30px;">
-              <h1 style="color: #dc2626; font-size: 28px; margin: 0;">Booking ${status === "Cancelled" ? "Cancelled" : "Declined"}</h1>
-            </div>
-            
-            <p style="color: #374151; font-size: 16px; line-height: 1.6;">Dear ${name || "Valued Guest"},</p>
-            
-            <p style="color: #374151; font-size: 16px; line-height: 1.6;">
-              We regret to inform you that your booking has been <strong style="color: #dc2626;">${status === "Cancelled" ? "cancelled" : "declined"}</strong>.
-            </p>
-            
-            <div style="background-color: #fef2f2; border-left: 4px solid #dc2626; padding: 20px; margin: 20px 0; border-radius: 4px;">
-              <h2 style="color: #dc2626; margin-top: 0; font-size: 18px;">Booking Details</h2>
-              <table style="width: 100%; color: #374151;">
-                <tr>
-                  <td style="padding: 8px 0; font-weight: bold;">Booking ID:</td>
-                  <td style="padding: 8px 0;">${bookingId || "N/A"}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; font-weight: bold;">Room Type:</td>
-                  <td style="padding: 8px 0;">${displayRoomName || roomType || "N/A"}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; font-weight: bold;">Check-in:</td>
-                  <td style="padding: 8px 0;">${formattedCheckIn}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; font-weight: bold;">Check-out:</td>
-                  <td style="padding: 8px 0;">${formattedCheckOut}</td>
-                </tr>
-              </table>
-            </div>
-            
-            <p style="color: #374151; font-size: 16px; line-height: 1.6;">
-              If you have any questions or would like to make a new booking, please contact us. We apologize for any inconvenience.
-            </p>
-            
-            <p style="color: #374151; font-size: 16px; line-height: 1.6; margin-top: 30px;">
-              Best regards,<br>
-              <strong>The LuxeStay Team</strong>
-            </p>
-          </div>
-        </div>
+      subject =
+        status === "Cancelled"
+          ? `Reservation cancelled — ${brandName}`
+          : `Reservation declined — ${brandName}`
+      const declineReason = status === "Declined" ? String(reason || "").trim() : ""
+      const negativeTitle =
+        status === "Cancelled" ? "Reservation cancelled" : "Reservation declined"
+      const negativeLead =
+        status === "Cancelled"
+          ? `We write to inform you that your reservation detailed below has been <strong style="color:#18181b;">cancelled</strong>.`
+          : `We regret that we are unable to accommodate your reservation request at this time. Your request has been <strong style="color:#18181b;">declined</strong>.`
+      const declinedRows = [
+        { label: "Booking reference", value: escapeEmailHtml(bookingId || "N/A") },
+        { label: "Room", value: escapeEmailHtml(displayRoomName || roomType || "N/A") },
+        { label: "Check-in", value: escapeEmailHtml(formattedCheckIn) },
+        { label: "Check-out", value: escapeEmailHtml(formattedCheckOut) },
+      ]
+      const reasonBlock = declineReason
+        ? formalNoticeBox(
+            `<p style="margin:0 0 6px;font-size:12px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:#78716c;">Remarks</p><p style="margin:0;font-size:14px;line-height:1.65;color:#44403c;">${escapeHtml(declineReason)}</p>`,
+            { borderColor: "#d6d3d1", bg: "#fafaf9" },
+          )
+        : ""
+      const declinedMain = `
+        ${formalHeading(negativeTitle, 1)}
+        ${formalParagraph(`Dear ${guestNameEsc},`)}
+        ${formalParagraph(negativeLead)}
+        ${formalDetailTable(declinedRows)}
+        ${reasonBlock}
+        ${formalParagraph(
+          `For alternative dates or further assistance, you may contact the property directly. We appreciate your understanding.`,
+        )}
+        ${formalParagraph(`Yours sincerely,<br/><strong style="color:#18181b;">${brandNameHtml}</strong>`, "margin-top:28px;margin-bottom:0;")}
       `
-      textContent = `Your booking has been ${status === "Cancelled" ? "cancelled" : "declined"}.\n\nBooking Details:\n- Booking ID: ${bookingId || "N/A"}\n- Room Type: ${displayRoomName || roomType || "N/A"}\n- Check-in: ${formattedCheckIn}\n- Check-out: ${formattedCheckOut}\n\nIf you have any questions, please contact us.`
+      htmlContent = formalEmailShell({
+        mainHtml: declinedMain,
+        footerHtml: defaultBookingFooter(brandFooterEsc),
+        accentColor: status === "Cancelled" ? "#57534e" : "#7c2d12",
+      })
+      textContent = `Reservation ${status === "Cancelled" ? "cancelled" : "declined"} — ${brandName}\n\nDear ${name || "Valued Guest"},\n\n${status === "Cancelled" ? "Your reservation has been cancelled." : "Your reservation request has been declined."}\n\nBooking reference: ${bookingId || "N/A"}\nRoom: ${displayRoomName || roomType || "N/A"}\nCheck-in: ${formattedCheckIn}\nCheck-out: ${formattedCheckOut}${declineReason ? `\n\nRemarks: ${declineReason}` : ""}\n\n— ${brandName}`
     } else {
       return NextResponse.json({ error: "Invalid status" }, { status: 400 })
     }
 
     const mailOptions = {
-      from: `"LuxeStay" <${process.env.EMAIL_USER}>`,
+      from: `"${getResortAdminMailDisplayName()}" <${fromUser}>`,
       to: email,
       subject: subject,
       html: htmlContent,
       text: textContent,
     }
-
-    // Verify transporter connection
-    try {
-      await transporter.verify()
-    } catch (verifyError) {
-      console.error("Transporter verification failed:", verifyError)
-      return NextResponse.json(
-        { error: "Email service connection failed" },
-        { status: 500 }
-      )
+    if (centralReplyTo) {
+      mailOptions.replyTo = centralReplyTo
     }
 
     // Send email
@@ -650,6 +484,7 @@ export async function POST(request) {
     return NextResponse.json({
       success: true,
       message: "Email sent successfully",
+      mailSource,
       paymentLinkCreated: !!paymentLink,
       paymentLink: paymentLink || null,
       totalAmount: totalAmount,

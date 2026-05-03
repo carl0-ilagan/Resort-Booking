@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/firebase"
 import { collection, query, where, getDocs } from "firebase/firestore"
+import {
+  bookingBelongsToTenant,
+  getLegacyUnscopedRoomsOwnerUidFromDb,
+  normalizeOwnerUid,
+  roomBelongsToTenant,
+} from "@/lib/booking-tenant"
 
 // Helper function to parse date consistently (handles string "YYYY-MM-DD" format)
 function parseDate(dateValue) {
@@ -28,7 +34,9 @@ function parseDate(dateValue) {
 
 export async function POST(request) {
   try {
-    const { roomType, checkIn, checkOut } = await request.json()
+    const { roomType, checkIn, checkOut, ownerUid: rawOwnerUid } = await request.json()
+    const ownerUid = normalizeOwnerUid(rawOwnerUid)
+    const legacyUnscopedUid = await getLegacyUnscopedRoomsOwnerUidFromDb(db)
 
     if (!roomType || !checkIn || !checkOut) {
       return NextResponse.json(
@@ -68,17 +76,20 @@ export async function POST(request) {
       const { collection: roomsCollection, getDocs } = await import("firebase/firestore")
       const roomsRef = roomsCollection(db, "rooms")
       const allRoomsSnapshot = await getDocs(roomsRef)
+      const tenantRoomDocs = allRoomsSnapshot.docs.filter((d) =>
+        roomBelongsToTenant(d.data(), ownerUid, legacyUnscopedUid),
+      )
       
-      if (!allRoomsSnapshot.empty) {
+      if (tenantRoomDocs.length) {
         // Try exact match by name first (case-insensitive)
-        let matchedRoom = allRoomsSnapshot.docs.find(doc => {
+        let matchedRoom = tenantRoomDocs.find(doc => {
           const data = doc.data()
           return data.name?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
         })
         
         // If no match by name, try by type
         if (!matchedRoom) {
-          matchedRoom = allRoomsSnapshot.docs.find(doc => {
+          matchedRoom = tenantRoomDocs.find(doc => {
             const data = doc.data()
             return data.type?.trim().toLowerCase() === trimmedRoomType.toLowerCase()
           })
@@ -86,7 +97,7 @@ export async function POST(request) {
         
         // If still no match, try partial match
         if (!matchedRoom) {
-          matchedRoom = allRoomsSnapshot.docs.find(doc => {
+          matchedRoom = tenantRoomDocs.find(doc => {
             const data = doc.data()
             const roomTypeLower = data.type?.trim().toLowerCase() || ""
             const roomNameLower = data.name?.trim().toLowerCase() || ""
@@ -152,6 +163,9 @@ export async function POST(request) {
     
     querySnapshot.docs.forEach((doc) => {
       const existingBooking = doc.data()
+      if (!bookingBelongsToTenant(existingBooking, ownerUid, legacyUnscopedUid)) {
+        return
+      }
       // Trim status to handle "Approved " with trailing space
       const status = existingBooking.status?.trim() || existingBooking.status
       const existingRoomType = existingBooking.roomType?.trim() || existingBooking.roomType

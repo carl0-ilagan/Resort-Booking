@@ -9,11 +9,16 @@ import { Pagination, PaginationContent, PaginationItem, PaginationLink, Paginati
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { db } from "@/lib/firebase"
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc } from "firebase/firestore"
+import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, where } from "firebase/firestore"
 import { toast } from "sonner"
 import { useIsMobile } from "@/hooks/use-mobile"
 
-export default function ManageContact() {
+function messageBelongsToTenant(data, tenantOwnerUid) {
+  if (tenantOwnerUid) return data.ownerUid === tenantOwnerUid
+  return !data.ownerUid
+}
+
+export default function ManageContact({ isLegacyHelpdesk = true, ownerUid = null }) {
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedMessage, setSelectedMessage] = useState(null)
@@ -27,15 +32,50 @@ export default function ManageContact() {
   // Fetch contact messages from Firestore
   useEffect(() => {
     const messagesRef = collection(db, "contactMessages")
-    const q = query(messagesRef, orderBy("createdAt", "desc"))
 
+    if (isLegacyHelpdesk) {
+      const q = query(messagesRef, orderBy("createdAt", "desc"))
+      const unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          const messagesData = snapshot.docs
+            .map((doc) => ({
+              id: doc.id,
+              ...doc.data(),
+            }))
+            .filter((m) => messageBelongsToTenant(m, null))
+          setMessages(messagesData)
+          setLoading(false)
+        },
+        (error) => {
+          console.error("Error fetching contact messages:", error)
+          toast.error("Failed to load contact messages")
+          setLoading(false)
+        },
+      )
+      return () => unsubscribe()
+    }
+
+    if (!ownerUid) {
+      setMessages([])
+      setLoading(false)
+      return
+    }
+
+    const q = query(messagesRef, where("ownerUid", "==", ownerUid))
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const messagesData = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }))
+        const messagesData = snapshot.docs
+          .map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          }))
+          .sort((a, b) => {
+            const ta = a.createdAt?.toMillis?.() ?? 0
+            const tb = b.createdAt?.toMillis?.() ?? 0
+            return tb - ta
+          })
         setMessages(messagesData)
         setLoading(false)
       },
@@ -43,11 +83,11 @@ export default function ManageContact() {
         console.error("Error fetching contact messages:", error)
         toast.error("Failed to load contact messages")
         setLoading(false)
-      }
+      },
     )
 
     return () => unsubscribe()
-  }, [])
+  }, [isLegacyHelpdesk, ownerUid])
 
   const handleMarkAsRead = async (messageId, currentStatus) => {
     if (processingId) return

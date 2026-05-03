@@ -10,6 +10,17 @@ export default function PWARegister() {
       window.syncManager = syncManager
     }
 
+    // Dev: unregister any SW — stale caches often break Tailwind/`/_next/static` CSS after reload until server restart.
+    if (typeof window !== "undefined" && process.env.NODE_ENV === "development" && "serviceWorker" in navigator) {
+      navigator.serviceWorker
+        .getRegistrations()
+        .then((regs) => {
+          regs.forEach((reg) => void reg.unregister())
+        })
+        .catch(() => {})
+      return
+    }
+
     if (typeof window !== "undefined" && "serviceWorker" in navigator) {
       // Register service worker with proper scope
       navigator.serviceWorker

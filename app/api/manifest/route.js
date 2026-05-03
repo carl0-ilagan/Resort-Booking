@@ -12,6 +12,14 @@ const BRANDING_DEFAULTS = {
   favicon: "/icon.svg",
 }
 
+/** PWA manifest icons must be valid & fetchable; Facebook CDN URLs often 403 in the browser. */
+function manifestIconSrc(value) {
+  const s = String(value || "").trim()
+  if (!s) return "/icon.svg"
+  if (/facebook\.com|fbcdn\.net/i.test(s)) return "/icon.svg"
+  return s
+}
+
 export async function GET() {
   try {
     // Fetch branding from Firestore
@@ -23,11 +31,13 @@ export async function GET() {
       
       if (brandingSnap.exists()) {
         const data = brandingSnap.data()
+        const rawLogo = data.logo || data.favicon || BRANDING_DEFAULTS.logo
+        const rawFav = data.favicon || data.logo || BRANDING_DEFAULTS.favicon
         branding = {
           name: data.name || BRANDING_DEFAULTS.name,
           shortName: data.name?.split(" ")[0] || BRANDING_DEFAULTS.shortName,
-          logo: data.logo || data.favicon || BRANDING_DEFAULTS.logo,
-          favicon: data.favicon || data.logo || BRANDING_DEFAULTS.favicon,
+          logo: manifestIconSrc(rawLogo),
+          favicon: manifestIconSrc(rawFav),
         }
       }
     } catch (error) {

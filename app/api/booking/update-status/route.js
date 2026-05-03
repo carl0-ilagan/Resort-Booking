@@ -4,7 +4,7 @@ import { doc, updateDoc, serverTimestamp } from "firebase/firestore"
 
 export async function POST(request) {
   try {
-    const { bookingId, status } = await request.json()
+    const { bookingId, status, reason } = await request.json()
 
     console.log("Update status request:", { bookingId, status })
 
@@ -38,16 +38,28 @@ export async function POST(request) {
     console.log("Updating booking:", bookingId, "to status:", status.trim())
 
     try {
-      await updateDoc(bookingRef, {
-        status: status.trim(), // Trim to handle "Approved " with trailing space
-        updatedAt: serverTimestamp(),
-      })
+      const trimmedStatus = status.trim()
+      const reasonText = typeof reason === "string" ? reason.trim() : ""
 
-      console.log(`✅ Booking ${bookingId} status updated to: ${status.trim()}`)
+      const payload = {
+        status: trimmedStatus, // Trim to handle "Approved " with trailing space
+        updatedAt: serverTimestamp(),
+      }
+      if (trimmedStatus === "Declined" && reasonText) {
+        payload.declineReason = reasonText
+        payload.declinedAt = serverTimestamp()
+      }
+      if (trimmedStatus === "Cancelled") {
+        payload.cancelledAt = serverTimestamp()
+      }
+
+      await updateDoc(bookingRef, payload)
+
+      console.log(`✅ Booking ${bookingId} status updated to: ${trimmedStatus}`)
 
       return NextResponse.json({
         success: true,
-        message: `Booking status updated to ${status.trim()}`,
+        message: `Booking status updated to ${trimmedStatus}`,
       })
     } catch (firestoreError) {
       console.error("❌ Firestore update error:", {

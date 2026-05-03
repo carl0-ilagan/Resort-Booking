@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { Plus, Upload, X } from "lucide-react"
 import { db } from "@/lib/firebase"
-import { collection, getDocs } from "firebase/firestore"
+import { collection, getDocs, query, where } from "firebase/firestore"
 import { toast } from "sonner"
 
 const ROOM_TYPES = ["Standard", "Deluxe", "Family", "Executive", "Suite"]
@@ -38,7 +38,10 @@ const createDefaultForm = () => ({
   featured: false,
 })
 
-export function AddRoomModal({ open, onClose, onSave }) {
+/**
+ * @param {{ open: boolean; onClose: () => void; onSave: (payload: unknown) => Promise<void>; duplicateScopeOwnerUid?: string | null }} props
+ */
+export function AddRoomModal({ open, onClose, onSave, duplicateScopeOwnerUid = null }) {
   const [form, setForm] = useState(() => createDefaultForm())
   const [customAmenity, setCustomAmenity] = useState("")
   const [saving, setSaving] = useState(false)
@@ -103,11 +106,19 @@ export function AddRoomModal({ open, onClose, onSave }) {
     const fetchExistingRooms = async () => {
       try {
         const roomsRef = collection(db, "rooms")
-        const snapshot = await getDocs(roomsRef)
-        const rooms = snapshot.docs.map((doc) => ({
+        let snapshot
+        if (duplicateScopeOwnerUid) {
+          snapshot = await getDocs(query(roomsRef, where("ownerUid", "==", duplicateScopeOwnerUid)))
+        } else {
+          snapshot = await getDocs(roomsRef)
+        }
+        let rooms = snapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
         }))
+        if (!duplicateScopeOwnerUid) {
+          rooms = rooms.filter((r) => !r.ownerUid)
+        }
         setExistingRooms(rooms)
       } catch (error) {
         console.error("Error fetching existing rooms:", error)
@@ -119,7 +130,7 @@ export function AddRoomModal({ open, onClose, onSave }) {
     return () => {
       document.body.style.overflow = originalOverflow
     }
-  }, [open])
+  }, [open, duplicateScopeOwnerUid])
 
   if (!open) {
     return null

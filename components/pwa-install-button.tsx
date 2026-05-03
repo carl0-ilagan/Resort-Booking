@@ -13,6 +13,8 @@ export default function PWAInstallButton({ variant = "default", className = "" }
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isInstalled, setIsInstalled] = useState(false)
   const [showBanner, setShowBanner] = useState(false)
+  /** Session dismiss flag — only set after mount so SSR + first paint match (avoid hydration mismatch). */
+  const [sessionDismissed, setSessionDismissed] = useState(false)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -118,18 +120,23 @@ export default function PWAInstallButton({ variant = "default", className = "" }
 
   const handleDismiss = () => {
     setShowBanner(false)
-    // Store dismissal in sessionStorage (not localStorage) to not show again for this session only
-    if (typeof window !== 'undefined' && window.sessionStorage) {
+    setSessionDismissed(true)
+    try {
       sessionStorage.setItem("pwa-install-dismissed", "true")
+    } catch {
+      /* ignore */
     }
   }
 
-  // Check if user dismissed in this session
+  // Restore session dismissal after mount only (never read sessionStorage during SSR/render)
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.sessionStorage) {
+    try {
       if (sessionStorage.getItem("pwa-install-dismissed") === "true") {
         setShowBanner(false)
+        setSessionDismissed(true)
       }
+    } catch {
+      /* ignore */
     }
   }, [])
 
@@ -153,24 +160,18 @@ export default function PWAInstallButton({ variant = "default", className = "" }
   }
 
   if (variant === "footer") {
-    // Footer variant - always show button in footer section
-    const isDismissed = typeof window !== 'undefined' && window.sessionStorage 
-      ? sessionStorage.getItem("pwa-install-dismissed") === "true"
-      : false
-    
-    // Always show button, but make it active only when prompt is available
     return (
       <div className="mt-4">
         <button
           onClick={handleInstallClick}
-          disabled={isDismissed}
+          disabled={sessionDismissed}
           className={`w-full px-4 py-2 rounded-lg font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 shadow-md ${
-            deferredPrompt && !isDismissed
+            deferredPrompt && !sessionDismissed
               ? "bg-white text-emerald-700 hover:bg-emerald-50 cursor-pointer"
               : "bg-emerald-600/80 text-white hover:bg-emerald-600 cursor-pointer opacity-75"
-          } ${isDismissed ? "opacity-50 cursor-not-allowed" : ""}`}
+          } ${sessionDismissed ? "opacity-50 cursor-not-allowed" : ""}`}
           title={
-            deferredPrompt && !isDismissed
+            deferredPrompt && !sessionDismissed
               ? "Click to install the app"
               : "Install will be available when browser prompts (requires HTTPS)"
           }
@@ -179,7 +180,7 @@ export default function PWAInstallButton({ variant = "default", className = "" }
           <span>Install App</span>
         </button>
         <p className="text-xs text-emerald-200 mt-2 text-center">
-          {deferredPrompt && !isDismissed
+          {deferredPrompt && !sessionDismissed
             ? "Get quick access and work offline"
             : "Install available when browser prompts"}
         </p>
@@ -188,11 +189,7 @@ export default function PWAInstallButton({ variant = "default", className = "" }
   }
 
   if (variant === "footer-banner") {
-    // Footer banner variant (fixed bottom)
-    const isDismissed = typeof window !== 'undefined' && window.sessionStorage
-      ? sessionStorage.getItem("pwa-install-dismissed") === "true"
-      : false
-    if (isDismissed || !showBanner || !deferredPrompt) return null
+    if (sessionDismissed || !showBanner || !deferredPrompt) return null
     
     return (
       <div className="fixed bottom-0 left-0 right-0 z-50 bg-emerald-700 text-white p-4 shadow-lg">

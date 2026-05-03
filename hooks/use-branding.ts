@@ -7,8 +7,17 @@ import { doc, getDoc, setDoc, onSnapshot } from "firebase/firestore"
 export type Branding = {
   name: string
   tagline: string
+  /** Empty = nav shows initials/placeholder; optional for resorts. */
   logo: string
   favicon: string
+  /** Hero background: HTTPS URL or `data:image/...;base64,...` stored in Firestore (no Storage required). */
+  heroImageUrl: string
+  /** Overlay opacity in percent (0-100). */
+  heroOverlayOpacity: number
+  /** Optional paragraph shown in About section. */
+  aboutBody: string
+  /** Up to 3 highlights shown in About section. */
+  aboutHighlights: { title: string; desc: string }[]
   tabTitle: string
   address: string
   phone: string
@@ -24,8 +33,16 @@ const BRANDING_COLLECTION = "settings"
 export const BRANDING_DEFAULTS: Branding = {
   name: "LuxeStay",
   tagline: "Luxury Hotel & Resort",
-  logo: "/icon.svg",
+  logo: "",
   favicon: "/icon.svg",
+  heroImageUrl: "",
+  heroOverlayOpacity: 55,
+  aboutBody: "",
+  aboutHighlights: [
+    { title: "Premium Comfort", desc: "Experience ultimate luxury in every room with world-class amenities." },
+    { title: "Expert Service", desc: "Our dedicated staff ensures your stay is memorable and hassle-free." },
+    { title: "Best Location", desc: "Centrally located with easy access to major attractions and restaurants." },
+  ],
   tabTitle: "LuxeStay - Luxury Hotel Booking",
   address: "123 Luxury Avenue, City Center",
   phone: "+1 (555) 123-4567",

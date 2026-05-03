@@ -1,17 +1,44 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
-import { CheckCircle, X, Undo2, Eye, Loader2, ChevronLeft, ChevronRight, Download, DollarSign, Trash2, AlertTriangle } from "lucide-react"
+import { useState, useEffect, useMemo, useRef } from "react"
+import {
+  X,
+  Undo2,
+  Eye,
+  Loader2,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  DollarSign,
+  Trash2,
+  AlertTriangle,
+  Printer,
+  FileDown,
+  Mail,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
-import { db } from "@/lib/firebase"
-import { collection, query, orderBy, onSnapshot, doc, deleteDoc } from "firebase/firestore"
+import { auth, db } from "@/lib/firebase"
+import { collection, query, orderBy, onSnapshot, doc, deleteDoc, where } from "firebase/firestore"
 import { toast } from "sonner"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { buildBookingInvoiceHtml, printBookingInvoiceHtml } from "@/lib/booking-invoice-html"
+import { downloadBookingInvoicePdf } from "@/lib/booking-invoice-pdf"
+import { computeBookingInvoiceOpts } from "@/lib/booking-invoice-model"
+import {
+  calcNightsForInvoice as calcNights,
+  getComputedTotalForInvoice as getComputedTotal,
+  invoiceComputeHelpers,
+} from "@/lib/booking-invoice-helpers"
+
+/** Resort-owner bookings only; legacy helpdesk has no owner-scoped token for `/api/booking/send-invoice`. */
+function canEmailInvoiceFromUi(isLegacyHelpdesk, ownerUid) {
+  return !isLegacyHelpdesk && !!ownerUid
+}
 
 // Status priority for sorting
 const STATUS_PRIORITY = {
@@ -22,29 +49,132 @@ const STATUS_PRIORITY = {
   "Declined": 5,
 }
 
-export default function ManageBookings() {
+const DEMO_BOOKINGS = [
+  {
+    id: "demo-001",
+    isDemo: true,
+    name: "Juan Dela Cruz",
+    email: "juan@example.com",
+    phone: "+63 912 345 6789",
+    roomType: "Suite Room",
+    checkIn: "2026-05-01",
+    checkOut: "2026-05-03",
+    guests: 2,
+    status: "Pending",
+    proofOfPaymentUrl:
+      "https://images.unsplash.com/photo-1627384113972-f4c0392fe5ad?auto=format&fit=crop&w=1200&q=80",
+    validIdUrl:
+      "https://images.unsplash.com/photo-1627384113744-9eae9bdfb1ef?auto=format&fit=crop&w=1200&q=80",
+    createdAt: new Date(),
+  },
+  {
+    id: "demo-002",
+    isDemo: true,
+    name: "Maria Santos",
+    email: "maria@example.com",
+    phone: "+63 917 000 1234",
+    roomType: "Deluxe Room",
+    checkIn: "2026-05-10",
+    checkOut: "2026-05-12",
+    guests: 3,
+    status: "Approved",
+    proofOfPaymentUrl:
+      "https://images.unsplash.com/photo-1554224154-22dec7ec8818?auto=format&fit=crop&w=1200&q=80",
+    validIdUrl:
+      "https://images.unsplash.com/photo-1618044733300-9472054094ee?auto=format&fit=crop&w=1200&q=80",
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 8),
+  },
+  {
+    id: "demo-003",
+    isDemo: true,
+    name: "Alex Reyes",
+    email: "alex@example.com",
+    phone: "+63 905 111 2222",
+    roomType: "Standard Room",
+    checkIn: "2026-04-20",
+    checkOut: "2026-04-22",
+    guests: 1,
+    status: "Completed",
+    proofOfPaymentUrl:
+      "https://images.unsplash.com/photo-1567427018141-0584cfcbf1b8?auto=format&fit=crop&w=1200&q=80",
+    validIdUrl:
+      "https://images.unsplash.com/photo-1618044733847-6f2a55d611b6?auto=format&fit=crop&w=1200&q=80",
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 26),
+  },
+]
+
+function bookingBelongsToTenant(data, tenantOwnerUid) {
+  if (tenantOwnerUid) return data.ownerUid === tenantOwnerUid
+  return !data.ownerUid
+}
+
+export default function ManageBookings({
+  isLegacyHelpdesk = true,
+  ownerUid = null,
+  invoiceBusiness = null,
+}) {
   const [bookings, setBookings] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedBooking, setSelectedBooking] = useState(null)
   const [deleteBooking, setDeleteBooking] = useState(null)
+  const [declineBooking, setDeclineBooking] = useState(null)
+  const [declineReason, setDeclineReason] = useState("")
   const [processingId, setProcessingId] = useState(null)
+  /** Non-null = sending invoice email for that booking id */
+  const [invoiceEmailBookingId, setInvoiceEmailBookingId] = useState(null)
+  const invoiceEmailLockRef = useRef(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [sortBy, setSortBy] = useState("all")
   const isMobile = useIsMobile()
   const ITEMS_PER_PAGE = 10
 
-  // Fetch bookings from Firestore
+  // Fetch bookings from Firestore (legacy = no ownerUid; resort owner = scoped)
   useEffect(() => {
     const bookingsRef = collection(db, "guestbooking")
-    const q = query(bookingsRef, orderBy("createdAt", "desc"))
 
+    if (isLegacyHelpdesk) {
+      const q = query(bookingsRef, orderBy("createdAt", "desc"))
+      const unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          const bookingsData = snapshot.docs
+            .map((doc) => ({
+              id: doc.id,
+              ...doc.data(),
+            }))
+            .filter((b) => bookingBelongsToTenant(b, null))
+          setBookings(bookingsData)
+          setLoading(false)
+        },
+        (error) => {
+          console.error("Error fetching bookings:", error)
+          toast.error("Failed to load bookings")
+          setLoading(false)
+        },
+      )
+      return () => unsubscribe()
+    }
+
+    if (!ownerUid) {
+      setBookings([])
+      setLoading(false)
+      return
+    }
+
+    const q = query(bookingsRef, where("ownerUid", "==", ownerUid))
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const bookingsData = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }))
+        const bookingsData = snapshot.docs
+          .map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          }))
+          .sort((a, b) => {
+            const ta = a.createdAt?.toMillis?.() ?? 0
+            const tb = b.createdAt?.toMillis?.() ?? 0
+            return tb - ta
+          })
         setBookings(bookingsData)
         setLoading(false)
       },
@@ -52,154 +182,58 @@ export default function ManageBookings() {
         console.error("Error fetching bookings:", error)
         toast.error("Failed to load bookings")
         setLoading(false)
-      }
+      },
     )
 
     return () => unsubscribe()
-  }, [])
+  }, [isLegacyHelpdesk, ownerUid])
 
-  const handleApprove = async (booking) => {
-    if (processingId) return // Prevent multiple clicks
-    
-    if (!booking || !booking.id || !booking.email) {
-      toast.error("Invalid booking data")
-      return
-    }
-    
-    setProcessingId(booking.id)
-    
-    try {
-      console.log("Approving booking:", booking.id)
-      
-      // Update status in Firestore
-      const updateResponse = await fetch("/api/booking/update-status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bookingId: booking.id,
-          status: "Approved",
-        }),
-      })
+  const showDemo = !loading && bookings.length === 0
+  const effectiveBookings = showDemo ? DEMO_BOOKINGS : bookings
 
-      const updateData = await updateResponse.json()
-
-      if (!updateResponse.ok) {
-        throw new Error(updateData.error || "Failed to update booking status")
-      }
-
-      console.log("Status updated, sending email...")
-
-      // Send approval email
-      try {
-        const emailResponse = await fetch("/api/booking/send-status-email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: booking.email,
-            name: booking.name,
-            roomType: booking.roomType,
-            checkIn: booking.checkIn,
-            checkOut: booking.checkOut,
-            status: "Approved",
-            bookingId: booking.id,
-          }),
-        })
-
-        const emailData = await emailResponse.json()
-        if (!emailResponse.ok) {
-          console.error("Failed to send email:", emailData.error)
-          toast.warning(`Booking approved, but email failed to send: ${emailData.error}`)
-        } else {
-          console.log("Email sent successfully")
-          console.log("Payment link status:", {
-            paymentLinkCreated: emailData.paymentLinkCreated,
-            hasPaymentLink: !!emailData.paymentLink,
-            totalAmount: emailData.totalAmount,
-            pricePerNight: emailData.pricePerNight,
-            numberOfNights: emailData.numberOfNights,
-            debug: emailData.debug,
-            paymentError: emailData.paymentError
-          })
-          
-          if (emailData.paymentLinkCreated) {
-            toast.success(`Booking approved! Email sent to ${booking.email} with payment link.`)
-          } else {
-            console.warn("⚠️ Payment link was NOT created.")
-            console.warn("Debug info:", emailData.debug)
-            console.warn("Payment error details:", emailData.paymentError)
-            if (emailData.paymentError?.errors && emailData.paymentError.errors.length > 0) {
-              console.warn("PayMongo error messages:", emailData.paymentError.errors)
-            }
-            if (emailData.paymentError?.response) {
-              console.warn("Full PayMongo response:", emailData.paymentError.response)
-            }
-            
-            let errorMessage = "Payment link was not generated"
-            if (emailData.paymentError) {
-              if (emailData.paymentError.status === 401) {
-                const errorDetails = emailData.paymentError.errors?.join(", ") || emailData.paymentError.message || "Unauthorized"
-                
-                // Check for specific error messages
-                if (errorDetails.includes("activate your account")) {
-                  errorMessage = "PayMongo account not activated. Please activate your account in PayMongo Dashboard first."
-                } else {
-                  errorMessage = `Authentication failed (401): ${errorDetails}. Please verify your PAYMONGO_SECRET_KEY is correct and active.`
-                }
-                
-                console.error("🔴 PayMongo 401 Error Details:", {
-                  status: emailData.paymentError.status,
-                  errors: emailData.paymentError.errors,
-                  response: emailData.paymentError.response,
-                  secretKeyPrefix: emailData.debug?.secretKeyPrefix
-                })
-              } else if (emailData.paymentError.status === 400) {
-                errorMessage = `Bad request: ${emailData.paymentError.errors?.join(", ") || "Invalid parameters"}`
-              } else if (emailData.paymentError.message) {
-                errorMessage = emailData.paymentError.message
-              } else if (emailData.paymentError.errors && emailData.paymentError.errors.length > 0) {
-                errorMessage = `PayMongo error: ${emailData.paymentError.errors.join(", ")}`
-              }
-            } else if (!emailData.debug?.hasSecretKey) {
-              errorMessage = "PAYMONGO_SECRET_KEY not configured"
-            } else if (emailData.debug?.secretKeyFormat === "incorrect") {
-              errorMessage = "Secret key format incorrect (should start with 'sk_')"
-            }
-            
-            toast.warning(`Booking approved! Email sent, but payment link failed: ${errorMessage}`)
-          }
-        }
-      } catch (emailError) {
-        console.error("Error sending email:", emailError)
-        toast.warning(`Booking approved, but email failed to send: ${emailError.message}`)
-      }
-    } catch (error) {
-      console.error("Error approving booking:", error)
-      toast.error(error.message || "Failed to approve booking")
-    } finally {
-      setProcessingId(null)
-    }
+  const formatPhp = (n) => {
+    const v = Number(n || 0)
+    if (!isFinite(v)) return "₱0"
+    return `₱${v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
   }
 
   const handleDecline = async (booking) => {
     if (processingId) return // Prevent multiple clicks
-    
+
     if (!booking || !booking.id || !booking.email) {
       toast.error("Invalid booking data")
       return
     }
-    
-    setProcessingId(booking.id)
-    
+
+    if (booking.isDemo) {
+      toast.info("Demo row only — connect Firestore bookings to manage real requests.")
+      return
+    }
+
+    setDeclineBooking(booking)
+    setDeclineReason("")
+  }
+
+  const confirmDecline = async () => {
+    if (!declineBooking || processingId) return
+    if (!declineReason.trim()) {
+      toast.error("Please enter a reason for decline.")
+      return
+    }
+
+    setProcessingId(declineBooking.id)
+
     try {
-      console.log("Declining booking:", booking.id)
-      
+      console.log("Declining booking:", declineBooking.id)
+
       // Update status in Firestore
       const updateResponse = await fetch("/api/booking/update-status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          bookingId: booking.id,
+          bookingId: declineBooking.id,
           status: "Declined",
+          reason: declineReason.trim(),
         }),
       })
 
@@ -207,23 +241,24 @@ export default function ManageBookings() {
 
       if (!updateResponse.ok) {
         throw new Error(updateData.error || "Failed to update booking status")
-  }
+      }
 
       console.log("Status updated, sending email...")
 
-      // Send decline email
+      // Send decline email with reason
       try {
         const emailResponse = await fetch("/api/booking/send-status-email", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            email: booking.email,
-            name: booking.name,
-            roomType: booking.roomType,
-            checkIn: booking.checkIn,
-            checkOut: booking.checkOut,
+            email: declineBooking.email,
+            name: declineBooking.name,
+            roomType: declineBooking.roomType,
+            checkIn: declineBooking.checkIn,
+            checkOut: declineBooking.checkOut,
             status: "Declined",
-            bookingId: booking.id,
+            bookingId: declineBooking.id,
+            reason: declineReason.trim(),
           }),
         })
 
@@ -233,7 +268,7 @@ export default function ManageBookings() {
           toast.warning(`Booking declined, but email failed to send: ${emailData.error}`)
         } else {
           console.log("Email sent successfully")
-          toast.success(`Booking declined. Email sent to ${booking.email}`)
+          toast.success(`Booking declined. Email sent to ${declineBooking.email}`)
         }
       } catch (emailError) {
         console.error("Error sending email:", emailError)
@@ -243,6 +278,8 @@ export default function ManageBookings() {
       console.error("Error declining booking:", error)
       toast.error(error.message || "Failed to decline booking")
     } finally {
+      setDeclineBooking(null)
+      setDeclineReason("")
       setProcessingId(null)
     }
   }
@@ -252,6 +289,11 @@ export default function ManageBookings() {
     
     if (!booking || !booking.id) {
       toast.error("Invalid booking data")
+      return
+    }
+
+    if (booking.isDemo) {
+      toast.info("Demo row only — connect Firestore bookings to manage real requests.")
       return
     }
     
@@ -274,7 +316,26 @@ export default function ManageBookings() {
         throw new Error(data.error || "Failed to mark booking as paid")
       }
 
-      toast.success(`Booking marked as paid! Amount: ₱${data.paidAmount?.toFixed(2) || "0.00"}`)
+      // Send approval email (no payment link; just confirmation)
+      try {
+        await fetch("/api/booking/send-status-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: booking.email,
+            name: booking.name,
+            roomType: booking.roomType,
+            checkIn: booking.checkIn,
+            checkOut: booking.checkOut,
+            status: "Approved",
+            bookingId: booking.id,
+          }),
+        })
+      } catch (e) {
+        console.warn("Approval email failed:", e?.message)
+      }
+
+      toast.success(`Paid & approved. Amount: ${formatPhp(data.paidAmount || 0)} (${data.nights || "?"} night(s))`)
     } catch (error) {
       console.error("Error marking booking as paid:", error)
       toast.error(error.message || "Failed to mark booking as paid")
@@ -333,6 +394,10 @@ export default function ManageBookings() {
   }
 
   const handleDeleteClick = (booking) => {
+    if (booking?.isDemo) {
+      toast.info("Demo row only — nothing to delete.")
+      return
+    }
     setDeleteBooking(booking)
   }
 
@@ -391,6 +456,77 @@ export default function ManageBookings() {
       return dateString
     }
   }
+
+  const getInvoiceOpts = (booking) =>
+    computeBookingInvoiceOpts(booking, invoiceBusiness, invoiceComputeHelpers)
+
+  const handleInvoicePrint = (booking) => {
+    if (!booking) return
+    const html = buildBookingInvoiceHtml(getInvoiceOpts(booking))
+    printBookingInvoiceHtml(html)
+  }
+
+  const handleInvoiceDownload = (booking) => {
+    if (!booking) return
+    try {
+      downloadBookingInvoicePdf(getInvoiceOpts(booking))
+      toast.success("Na-download ang PDF invoice.")
+    } catch (e) {
+      console.error(e)
+      toast.error("Hindi ma-generate ang PDF. Subukan ulit.")
+    }
+  }
+
+  const handleInvoiceEmailGuest = async (booking) => {
+    if (!booking?.id || invoiceEmailLockRef.current) return
+    if (booking.isDemo) {
+      toast.info("Demo row only — walang email ang demo booking.")
+      return
+    }
+    if (!String(booking.email || "").trim()) {
+      toast.error("Walang email ang guest sa booking na ito.")
+      return
+    }
+    if (!canEmailInvoiceFromUi(isLegacyHelpdesk, ownerUid)) {
+      toast.error("Email invoice ay para sa resort dashboard lamang (may owner account).")
+      return
+    }
+    const user = auth.currentUser
+    if (!user) {
+      toast.error("Mag-sign in muna bilang resort owner.")
+      return
+    }
+    invoiceEmailLockRef.current = true
+    setInvoiceEmailBookingId(booking.id)
+    try {
+      const idToken = await user.getIdToken()
+      const res = await fetch("/api/booking/send-invoice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookingId: booking.id, idToken }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || res.statusText || "Request failed")
+      }
+      toast.success(`Naipadala ang invoice sa ${String(booking.email).trim()}.`)
+    } catch (e) {
+      console.error(e)
+      toast.error(e?.message || "Hindi maipadala ang invoice. Subukan ulit.")
+    } finally {
+      invoiceEmailLockRef.current = false
+      setInvoiceEmailBookingId(null)
+    }
+  }
+
+  const invoiceMailUiDisabled = (booking) =>
+    !booking ||
+    booking.isDemo ||
+    !String(booking.email || "").trim() ||
+    !canEmailInvoiceFromUi(isLegacyHelpdesk, ownerUid) ||
+    (invoiceEmailBookingId !== null && invoiceEmailBookingId !== booking.id)
+
+  const invoiceMailUiBusy = (booking) => invoiceEmailBookingId === booking?.id
 
   const exportToExcel = () => {
     try {
@@ -464,7 +600,7 @@ export default function ManageBookings() {
 
   // Sort and filter bookings
   const sortedAndFilteredBookings = useMemo(() => {
-    let filtered = [...bookings]
+    let filtered = [...effectiveBookings]
 
     // Filter by status
     if (sortBy !== "all") {
@@ -489,7 +625,7 @@ export default function ManageBookings() {
     })
 
     return filtered
-  }, [bookings, sortBy])
+  }, [effectiveBookings, sortBy])
 
   // Pagination calculations
   const totalPages = Math.ceil(sortedAndFilteredBookings.length / ITEMS_PER_PAGE)
@@ -541,7 +677,7 @@ export default function ManageBookings() {
           <Button
             onClick={exportToExcel}
             className="bg-emerald-700 hover:bg-emerald-800 text-white"
-            disabled={loading || sortedAndFilteredBookings.length === 0}
+            disabled={loading || sortedAndFilteredBookings.length === 0 || showDemo}
           >
             <Download size={16} className="mr-2" />
             Export to Excel
@@ -582,68 +718,60 @@ export default function ManageBookings() {
                   <div className="flex-1 min-w-0">
                     <h3 className="font-semibold text-foreground truncate">{booking.name}</h3>
                     <p className="text-xs text-muted-foreground truncate">{booking.email}</p>
+                    <p className="mt-1 text-xs font-semibold text-foreground">
+                      {formatPhp(getComputedTotal(booking))}
+                      {booking.paymentStatus === "paid" && (
+                        <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                          Paid
+                        </span>
+                      )}
+                    </p>
                     <span className={`inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-semibold ${getStatusColor(booking.status)}`}>
                       {booking.status?.trim() || "Pending"}
                     </span>
                   </div>
                 <div className="flex gap-2 shrink-0">
+                  {booking.paymentStatus !== "paid" && booking.status?.trim() !== "Declined" && booking.status?.trim() !== "Cancelled" && (
+                    <button
+                      onClick={() => handleMarkAsPaid(booking)}
+                      disabled={processingId === booking.id}
+                      className="p-2 bg-blue-100 text-blue-800 rounded-lg hover:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                      title="Mark as Paid (auto-approve)"
+                    >
+                      {processingId === booking.id ? (
+                        <Loader2 size={18} className="animate-spin" />
+                      ) : (
+                        <DollarSign size={18} />
+                      )}
+                    </button>
+                  )}
                   {booking.status?.trim() === "Pending" && (
-                    <>
-                      <button
-                        onClick={() => handleApprove(booking)}
-                        disabled={processingId === booking.id}
-                        className="p-2 bg-green-100 text-green-800 rounded-lg hover:bg-green-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                        title="Approve"
-                      >
-                        {processingId === booking.id ? (
-                          <Loader2 size={18} className="animate-spin" />
-                        ) : (
-                          <CheckCircle size={18} />
-                        )}
-                      </button>
-                      <button
-                        onClick={() => handleDecline(booking)}
-                        disabled={processingId === booking.id}
-                        className="p-2 bg-red-100 text-red-800 rounded-lg hover:bg-red-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                        title="Decline"
-                      >
-                        {processingId === booking.id ? (
-                          <Loader2 size={18} className="animate-spin" />
-                        ) : (
-                          <X size={18} />
-                        )}
-                      </button>
-                    </>
+                    <button
+                      onClick={() => handleDecline(booking)}
+                      disabled={processingId === booking.id}
+                      className="p-2 bg-red-100 text-red-800 rounded-lg hover:bg-red-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                      title="Decline"
+                    >
+                      {processingId === booking.id ? (
+                        <Loader2 size={18} className="animate-spin" />
+                      ) : (
+                        <X size={18} />
+                      )}
+                    </button>
                   )}
                   {booking.status?.trim() === "Approved" && (
-                    <>
-                      {booking.paymentStatus !== "paid" && (
-                        <button
-                          onClick={() => handleMarkAsPaid(booking)}
-                          disabled={processingId === booking.id}
-                          className="p-2 bg-blue-100 text-blue-800 rounded-lg hover:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                          title="Mark as Paid"
-                        >
-                          {processingId === booking.id ? (
-                            <Loader2 size={18} className="animate-spin" />
-                          ) : (
-                            <DollarSign size={18} />
-                          )}
-                        </button>
+                    <button
+                      onClick={() => handleCancel(booking)}
+                      disabled={processingId === booking.id}
+                      className="p-2 bg-orange-100 text-orange-800 rounded-lg hover:bg-orange-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                      title="Cancel"
+                    >
+                      {processingId === booking.id ? (
+                        <Loader2 size={18} className="animate-spin" />
+                      ) : (
+                        <Undo2 size={18} />
                       )}
-                      <button
-                        onClick={() => handleCancel(booking)}
-                        disabled={processingId === booking.id}
-                        className="p-2 bg-orange-100 text-orange-800 rounded-lg hover:bg-orange-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                        title="Cancel"
-                      >
-                        {processingId === booking.id ? (
-                          <Loader2 size={18} className="animate-spin" />
-                        ) : (
-                          <Undo2 size={18} />
-                        )}
-                      </button>
-                    </>
+                    </button>
                   )}
                   <button
                     onClick={() => setSelectedBooking(booking)}
@@ -651,6 +779,23 @@ export default function ManageBookings() {
                     title="View Details"
                   >
                     <Eye size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleInvoiceEmailGuest(booking)}
+                    disabled={invoiceMailUiDisabled(booking)}
+                    className="p-2 bg-teal-100 text-teal-800 rounded-lg hover:bg-teal-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    title={
+                      !canEmailInvoiceFromUi(isLegacyHelpdesk, ownerUid)
+                        ? "Resort owner dashboard only"
+                        : "I-email ang invoice sa guest"
+                    }
+                  >
+                    {invoiceMailUiBusy(booking) ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <Mail size={18} />
+                    )}
                   </button>
                   <button
                     onClick={() => handleDeleteClick(booking)}
@@ -683,6 +828,7 @@ export default function ManageBookings() {
                   <th className="text-left py-4 px-6 font-semibold text-foreground">Room Type</th>
                   <th className="text-left py-4 px-6 font-semibold text-foreground">Check-in / Check-out</th>
                   <th className="text-left py-4 px-6 font-semibold text-foreground">Guests</th>
+                  <th className="text-left py-4 px-6 font-semibold text-foreground">Amount</th>
                 <th className="text-left py-4 px-6 font-semibold text-foreground">Status</th>
                 <th className="text-left py-4 px-6 font-semibold text-foreground">Actions</th>
               </tr>
@@ -704,6 +850,14 @@ export default function ManageBookings() {
                       <span className="text-muted-foreground/70">to {formatDate(booking.checkOut)}</span>
                   </td>
                     <td className="py-4 px-6 text-foreground">{booking.guests}</td>
+                    <td className="py-4 px-6">
+                      <span className="font-semibold text-foreground">{formatPhp(getComputedTotal(booking))}</span>
+                      {booking.paymentStatus === "paid" && (
+                        <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                          Paid
+                        </span>
+                      )}
+                    </td>
                   <td className="py-4 px-6">
                     <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getStatusColor(booking.status)}`}>
                         {booking.status?.trim() || "Pending"}
@@ -711,70 +865,71 @@ export default function ManageBookings() {
                   </td>
                   <td className="py-4 px-6">
                     <div className="flex gap-2">
-                        {booking.status?.trim() === "Pending" && (
-                        <>
+                        {booking.paymentStatus !== "paid" && booking.status?.trim() !== "Declined" && booking.status?.trim() !== "Cancelled" && (
                           <button
-                              onClick={() => handleApprove(booking)}
-                              disabled={processingId === booking.id}
-                              className="p-2 bg-green-100 text-green-800 rounded hover:bg-green-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                            title="Approve"
+                            onClick={() => handleMarkAsPaid(booking)}
+                            disabled={processingId === booking.id}
+                            className="p-2 bg-blue-100 text-blue-800 rounded hover:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                            title="Mark as Paid (auto-approve)"
                           >
-                              {processingId === booking.id ? (
-                                <Loader2 size={16} className="animate-spin" />
-                              ) : (
-                            <CheckCircle size={16} />
-                              )}
-                            </button>
-                            <button
-                              onClick={() => handleDecline(booking)}
-                              disabled={processingId === booking.id}
-                              className="p-2 bg-red-100 text-red-800 rounded hover:bg-red-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                              title="Decline"
-                            >
-                              {processingId === booking.id ? (
-                                <Loader2 size={16} className="animate-spin" />
-                              ) : (
-                                <X size={16} />
-                              )}
+                            {processingId === booking.id ? (
+                              <Loader2 size={16} className="animate-spin" />
+                            ) : (
+                              <DollarSign size={16} />
+                            )}
                           </button>
-                          </>
+                        )}
+                        {booking.status?.trim() === "Pending" && (
+                          <button
+                            onClick={() => handleDecline(booking)}
+                            disabled={processingId === booking.id}
+                            className="p-2 bg-red-100 text-red-800 rounded hover:bg-red-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                            title="Decline"
+                          >
+                            {processingId === booking.id ? (
+                              <Loader2 size={16} className="animate-spin" />
+                            ) : (
+                              <X size={16} />
+                            )}
+                          </button>
                         )}
                         {booking.status?.trim() === "Approved" && (
-                          <>
-                            {booking.paymentStatus !== "paid" && (
-                              <button
-                                onClick={() => handleMarkAsPaid(booking)}
-                                disabled={processingId === booking.id}
-                                className="p-2 bg-blue-100 text-blue-800 rounded hover:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                                title="Mark as Paid"
-                              >
-                                {processingId === booking.id ? (
-                                  <Loader2 size={16} className="animate-spin" />
-                                ) : (
-                                  <DollarSign size={16} />
-                                )}
-                              </button>
+                          <button
+                            onClick={() => handleCancel(booking)}
+                            disabled={processingId === booking.id}
+                            className="p-2 bg-orange-100 text-orange-800 rounded hover:bg-orange-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                            title="Cancel"
+                          >
+                            {processingId === booking.id ? (
+                              <Loader2 size={16} className="animate-spin" />
+                            ) : (
+                              <Undo2 size={16} />
                             )}
-                            <button
-                              onClick={() => handleCancel(booking)}
-                              disabled={processingId === booking.id}
-                              className="p-2 bg-orange-100 text-orange-800 rounded hover:bg-orange-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                              title="Cancel"
-                            >
-                              {processingId === booking.id ? (
-                                <Loader2 size={16} className="animate-spin" />
-                              ) : (
-                                <Undo2 size={16} />
-                              )}
-                            </button>
-                          </>
-                      )}
+                          </button>
+                        )}
                         <button
                         onClick={() => setSelectedBooking(booking)}
                           className="p-2 bg-secondary text-secondary-foreground rounded hover:bg-secondary/80 transition"
                         title="View Details"
                       >
                         <Eye size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleInvoiceEmailGuest(booking)}
+                        disabled={invoiceMailUiDisabled(booking)}
+                        className="p-2 bg-teal-100 text-teal-800 rounded hover:bg-teal-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                        title={
+                          !canEmailInvoiceFromUi(isLegacyHelpdesk, ownerUid)
+                            ? "Resort owner dashboard only"
+                            : "I-email ang invoice sa guest"
+                        }
+                      >
+                        {invoiceMailUiBusy(booking) ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Mail size={16} />
+                        )}
                       </button>
                       <button
                         onClick={() => handleDeleteClick(booking)}
@@ -921,9 +1076,40 @@ export default function ManageBookings() {
               </div>
               
                 <div>
-                  <p className={`${isMobile ? 'text-[10px]' : 'text-xs'} text-muted-foreground mb-1`}>Room Type</p>
+                    <p className={`${isMobile ? 'text-[10px]' : 'text-xs'} text-muted-foreground mb-1`}>Room Type</p>
                   <p className={`font-semibold text-foreground ${isMobile ? 'text-sm' : 'text-base'}`}>
                     {selectedBooking.roomType || "N/A"}
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-border bg-secondary/20 px-4 py-3">
+                  <p className={`${isMobile ? "text-[10px]" : "text-xs"} text-muted-foreground mb-2 font-semibold uppercase tracking-wide`}>
+                    Invoice amount
+                  </p>
+                  <div className={`flex flex-wrap items-end justify-between gap-2 ${isMobile ? "flex-col items-start" : ""}`}>
+                    <div className="text-sm text-muted-foreground">
+                      {Number(selectedBooking.pricePerNight || 0) > 0 &&
+                      (Number(selectedBooking.nights || 0) > 0 ||
+                        calcNights(selectedBooking.checkIn, selectedBooking.checkOut) > 0) ? (
+                        <>
+                          <span className="font-medium text-foreground">
+                            {formatPhp(Number(selectedBooking.pricePerNight || 0))}
+                          </span>{" "}
+                          ×{" "}
+                          {Number(selectedBooking.nights || 0) ||
+                            calcNights(selectedBooking.checkIn, selectedBooking.checkOut)}{" "}
+                          night(s)
+                        </>
+                      ) : (
+                        <span>Total due / recorded</span>
+                      )}
+                    </div>
+                    <p className={`font-bold text-foreground ${isMobile ? "text-xl" : "text-2xl"}`}>
+                      {formatPhp(getComputedTotal(selectedBooking))}
+                    </p>
+                  </div>
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    May watermark ng resort name ang invoice. I-print o mag-download ng PDF sa ibaba.
                   </p>
                 </div>
                 
@@ -956,18 +1142,145 @@ export default function ManageBookings() {
                     </p>
                 </div>
               )}
+
+              {(selectedBooking.proofOfPaymentUrl || selectedBooking.validIdUrl) && (
+                <div className="pt-2 border-t border-border">
+                  <p className={`${isMobile ? "text-[10px]" : "text-xs"} text-muted-foreground mb-2`}>
+                    Payment attachments
+                  </p>
+                  <div className={`grid ${isMobile ? "grid-cols-1" : "grid-cols-2"} gap-4`}>
+                    <div className="rounded-lg border border-border bg-card p-3">
+                      <p className="text-xs font-semibold text-foreground mb-2">Proof of payment</p>
+                      {selectedBooking.proofOfPaymentUrl ? (
+                        <a
+                          href={selectedBooking.proofOfPaymentUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block"
+                          title="Open proof of payment"
+                        >
+                          <img
+                            src={selectedBooking.proofOfPaymentUrl}
+                            alt="Proof of payment"
+                            className="h-44 w-full rounded-md border border-border bg-white object-contain"
+                            loading="lazy"
+                          />
+                          <p className="mt-2 text-[11px] text-emerald-700 underline break-all">Open image</p>
+                        </a>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Not provided.</p>
+                      )}
+                    </div>
+
+                    <div className="rounded-lg border border-border bg-card p-3">
+                      <p className="text-xs font-semibold text-foreground mb-2">Valid ID</p>
+                      {selectedBooking.validIdUrl ? (
+                        <a
+                          href={selectedBooking.validIdUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block"
+                          title="Open valid ID"
+                        >
+                          <img
+                            src={selectedBooking.validIdUrl}
+                            alt="Valid ID"
+                            className="h-44 w-full rounded-md border border-border bg-white object-contain"
+                            loading="lazy"
+                          />
+                          <p className="mt-2 text-[11px] text-emerald-700 underline break-all">Open image</p>
+                        </a>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Not provided.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
               </div>
               
-              <DialogFooter className={isMobile ? 'flex-col gap-2 mt-4' : 'mt-6'}>
-              <Button
-                onClick={() => setSelectedBooking(null)}
-                  className={`${isMobile ? 'w-full' : ''} bg-primary hover:bg-primary/90 text-primary-foreground`}
+              <DialogFooter
+                className={`${isMobile ? "flex-col gap-2 mt-4" : "mt-6"} flex flex-wrap gap-2 sm:justify-end`}
               >
-                Close
-              </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => handleInvoicePrint(selectedBooking)}
+                  className={`gap-2 ${isMobile ? "w-full" : ""}`}
+                >
+                  <Printer className="h-4 w-4 shrink-0" />
+                  Print invoice
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => handleInvoiceDownload(selectedBooking)}
+                  className={`gap-2 ${isMobile ? "w-full" : ""}`}
+                >
+                  <FileDown className="h-4 w-4 shrink-0" />
+                  Download PDF
+                </Button>
+                <Button
+                  onClick={() => setSelectedBooking(null)}
+                  className={`${isMobile ? "w-full" : ""} bg-primary hover:bg-primary/90 text-primary-foreground`}
+                >
+                  Close
+                </Button>
               </DialogFooter>
             </>
       )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Decline Reason Modal */}
+      <Dialog open={!!declineBooking} onOpenChange={(open) => !open && setDeclineBooking(null)}>
+        <DialogContent className={`${isMobile ? 'max-w-[95%] w-[95%] p-4' : 'max-w-lg p-6'}`}>
+          <DialogHeader className={isMobile ? 'pb-2' : 'pb-4'}>
+            <DialogTitle className={`${isMobile ? 'text-lg' : 'text-xl'} font-bold text-foreground`}>
+              Decline booking
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Add a reason to send to the guest.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <p className="text-sm font-semibold text-foreground">
+              {declineBooking?.name} <span className="text-muted-foreground font-normal">({declineBooking?.email})</span>
+            </p>
+            <textarea
+              value={declineReason}
+              onChange={(e) => setDeclineReason(e.target.value)}
+              rows={4}
+              placeholder="e.g. Selected dates are no longer available."
+              className="w-full rounded-lg border border-border bg-background px-4 py-2 text-sm text-foreground"
+            />
+            <p className="text-xs text-muted-foreground">This will be included in the decline email.</p>
+          </div>
+
+          <DialogFooter className={isMobile ? 'flex-col gap-2 mt-4' : 'mt-6'}>
+            <Button
+              onClick={() => setDeclineBooking(null)}
+              className={`${isMobile ? 'w-full' : ''} bg-secondary text-secondary-foreground hover:bg-secondary/80`}
+              disabled={processingId === declineBooking?.id}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmDecline}
+              className={`${isMobile ? 'w-full' : ''} bg-red-600 hover:bg-red-700 text-white`}
+              disabled={processingId === declineBooking?.id}
+            >
+              {processingId === declineBooking?.id ? (
+                <span className="inline-flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Declining…
+                </span>
+              ) : (
+                "Decline & email guest"
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

@@ -1,11 +1,31 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { Menu, X, Star, MapPin, Phone, Mail, Send, ChevronLeft, ChevronRight, ZoomIn, Loader2, Moon, Sun } from "lucide-react"
-import { useBranding } from "@/hooks/use-branding"
+import {
+  Menu,
+  X,
+  Star,
+  MapPin,
+  Phone,
+  Mail,
+  Send,
+  ChevronLeft,
+  ChevronRight,
+  ZoomIn,
+  Loader2,
+  Moon,
+  Sun,
+  LayoutDashboard,
+  Upload,
+  Navigation,
+} from "lucide-react"
+import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
+import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
+import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
+import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
 import DynamicHead from "@/components/dynamic-head"
 import { db } from "@/lib/firebase"
-import { collection, query, orderBy, onSnapshot, where } from "firebase/firestore"
+import { collection, doc, query, orderBy, onSnapshot, where } from "firebase/firestore"
 import { syncManager } from "@/lib/offline-storage"
 import PWAInstallButton from "@/components/pwa-install-button"
 import dynamic from "next/dynamic"
@@ -20,6 +40,8 @@ import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { CalendarIcon } from "lucide-react"
 import { format } from "date-fns"
+import { compressImageFileToDataUrl } from "@/lib/data-url-files"
+import { getGoogleDirectionsUrl, getMapPreviewIframeSrc } from "@/lib/maps-preview-url"
 
 // Feedback will be fetched from Firestore dynamically
 
@@ -247,7 +269,113 @@ function RoomCard({ room, onViewDetails, onImageClick, theme = "light" }) {
 const ROOMS_PER_PAGE = 6
 
 export default function Home() {
-  const { branding } = useBranding()
+  const { branding: globalBranding } = useBranding()
+  const { settings: marketplaceSettings } = useMarketplaceSettings()
+  const [bookingOwnerUid, setBookingOwnerUid] = useState(null)
+
+  useEffect(() => {
+    const read = () => {
+      if (typeof window === "undefined") return
+      const params = new URLSearchParams(window.location.search)
+      setBookingOwnerUid(normalizeOwnerUidFromSearchParam(params.get("o")) || null)
+    }
+    read()
+    window.addEventListener("popstate", read)
+    return () => window.removeEventListener("popstate", read)
+  }, [])
+
+  const legacyUnscopedUid = String(marketplaceSettings.legacyUnscopedRoomsOwnerUid || "").trim()
+  const legacyUnscopedLanding =
+    Boolean(bookingOwnerUid && legacyUnscopedUid && bookingOwnerUid === legacyUnscopedUid)
+  const paymentRequired = Boolean(bookingOwnerUid)
+
+  const { branding: ownerBrandingSnapshot, loading: ownerBrandingLoading } =
+    useResortOwnerBranding(bookingOwnerUid)
+  /** Per-owner doc if present; while loading or if no doc, use global `settings/branding` (legacy hosts). */
+  const branding = !bookingOwnerUid
+    ? globalBranding
+    : ownerBrandingLoading
+      ? globalBranding
+      : (ownerBrandingSnapshot ?? globalBranding)
+
+  /** Marketplace listing fields (`resorts/{uid}`) — maps link + location label from resort admin */
+  const [resortMarketplace, setResortMarketplace] = useState({ mapsUrl: "", location: "" })
+  const [mapIframe, setMapIframe] = useState(null)
+
+  useEffect(() => {
+    if (!db || !bookingOwnerUid) {
+      setResortMarketplace({ mapsUrl: "", location: "" })
+      return undefined
+    }
+    const ref = doc(db, "resorts", bookingOwnerUid)
+    return onSnapshot(ref, (snap) => {
+      const d = snap.exists() ? snap.data() : {}
+      setResortMarketplace({
+        mapsUrl: typeof d.mapsUrl === "string" ? d.mapsUrl.trim() : "",
+        location: typeof d.location === "string" ? d.location.trim() : "",
+      })
+    })
+  }, [bookingOwnerUid])
+
+  useEffect(() => {
+    let cancelled = false
+    const raw = String(resortMarketplace.mapsUrl || "").trim()
+    if (!raw || !bookingOwnerUid) {
+      setMapIframe(null)
+      return undefined
+    }
+
+    const direct = getMapPreviewIframeSrc(raw)
+    if (direct) {
+      setMapIframe(direct)
+      return undefined
+    }
+
+    async function resolveShortThenPreview() {
+      try {
+        const u = new URL(raw)
+        const host = u.hostname.replace(/^www\./, "").toLowerCase()
+        const isShort =
+          host === "maps.app.goo.gl" || (host === "goo.gl" && u.pathname.toLowerCase().includes("/maps"))
+        if (!isShort) {
+          if (!cancelled) setMapIframe(null)
+          return
+        }
+        const res = await fetch(`/api/maps/resolve-short-link?url=${encodeURIComponent(raw)}`)
+        if (!res.ok || cancelled) return
+        const data = await res.json()
+        const resolved = typeof data?.url === "string" ? data.url.trim() : ""
+        if (!resolved || cancelled) return
+        const preview = getMapPreviewIframeSrc(resolved)
+        if (!cancelled) setMapIframe(preview)
+      } catch {
+        if (!cancelled) setMapIframe(null)
+      }
+    }
+    resolveShortThenPreview()
+    return () => {
+      cancelled = true
+    }
+  }, [resortMarketplace.mapsUrl, bookingOwnerUid])
+
+  const navLinks = ["Home", "Rooms", "Booking", "About", "Contact"]
+  /** Marketplace listing has something to show above contact (map link and/or area label) */
+  const hasResortListingHint =
+    Boolean(bookingOwnerUid) &&
+    (String(resortMarketplace.mapsUrl || "").trim() ||
+      String(resortMarketplace.location || "").trim())
+  const showMapEmbedCard =
+    Boolean(mapIframe?.src) || Boolean(String(resortMarketplace.mapsUrl || "").trim())
+
+  const googleDirectionsUrl =
+    bookingOwnerUid &&
+    getGoogleDirectionsUrl(String(resortMarketplace.mapsUrl || "").trim(), {
+      fallbackAddress:
+        String(resortMarketplace.location || "").trim() ||
+        String(branding.address || "").trim(),
+      fallbackLabel: String(branding.name || "").trim(),
+    })
+
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [activeRoom, setActiveRoom] = useState(null)
   const [rooms, setRooms] = useState([])
@@ -292,6 +420,12 @@ export default function Home() {
   const [otpCode, setOtpCode] = useState("")
   const [otpVerifying, setOtpVerifying] = useState(false)
   const [bookingSubmitting, setBookingSubmitting] = useState(false)
+  const [paymentQrUrl, setPaymentQrUrl] = useState("")
+  const [paymentInstructions, setPaymentInstructions] = useState("")
+  const [proofOfPaymentUrl, setProofOfPaymentUrl] = useState("")
+  const [validIdUrl, setValidIdUrl] = useState("")
+  const [uploadingProof, setUploadingProof] = useState(false)
+  const [uploadingId, setUploadingId] = useState(false)
   
   // Auto-submit when OTP reaches 6 digits
   useEffect(() => {
@@ -324,31 +458,82 @@ export default function Home() {
   const [contact, setContact] = useState({ name: "", email: "", message: "" })
   const [contactSubmitting, setContactSubmitting] = useState(false)
 
-  // Fetch rooms from Firestore
+  const calculateNights = (checkIn, checkOut) => {
+    try {
+      if (!checkIn || !checkOut) return 0
+      const inDate = checkIn.includes("T") ? new Date(checkIn) : new Date(checkIn + "T00:00:00")
+      const outDate = checkOut.includes("T") ? new Date(checkOut) : new Date(checkOut + "T00:00:00")
+      if (isNaN(inDate.getTime()) || isNaN(outDate.getTime())) return 0
+      inDate.setHours(0, 0, 0, 0)
+      outDate.setHours(0, 0, 0, 0)
+      const diff = outDate.getTime() - inDate.getTime()
+      const nights = Math.ceil(diff / (1000 * 60 * 60 * 24))
+      return nights > 0 ? nights : 1
+    } catch {
+      return 0
+    }
+  }
+
+  const selectedRoom = rooms.find((r) => String(r?.name || "").trim() === String(formData.roomType || "").trim()) || null
+  const basePrice = Number(selectedRoom?.price || 0) || 0
+  const discount = Number(selectedRoom?.discount || 0) || 0
+  const pricePerNight = discount > 0 ? basePrice * (1 - discount / 100) : basePrice
+  const nights = calculateNights(formData.checkIn, formData.checkOut)
+  const estimatedTotal = nights > 0 ? pricePerNight * nights : 0
+  const formatPhp = (n) =>
+    `₱${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+
+  useEffect(() => {
+    if (!db || !bookingOwnerUid) {
+      setPaymentQrUrl("")
+      setPaymentInstructions("")
+      return undefined
+    }
+    const unsub = onSnapshot(doc(db, "resortOwners", bookingOwnerUid, "site", "payment"), (snap) => {
+      const d = snap.exists() ? snap.data() : {}
+      setPaymentQrUrl(String(d?.gcashQrUrl || "").trim())
+      setPaymentInstructions(String(d?.instructions || "").trim())
+    })
+    return () => unsub()
+  }, [bookingOwnerUid])
+
+  const uploadGuestFile = async (file) => {
+    /** Shrinks photos client-side so proof/ID fit in one Firestore booking doc (no Storage). */
+    return await compressImageFileToDataUrl(file)
+  }
+
+  // Fetch rooms from Firestore (legacy landing = no ownerUid; `?o=` = that resort's rooms)
   useEffect(() => {
     const roomsRef = collection(db, "rooms")
-    
-    // Fetch all rooms - we'll sort in JavaScript to avoid Firestore index requirements
-    const q = query(roomsRef)
+    const q =
+      bookingOwnerUid && !legacyUnscopedLanding
+        ? query(roomsRef, where("ownerUid", "==", bookingOwnerUid))
+        : query(roomsRef)
 
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const roomsData = snapshot.docs
-          .map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-          }))
+        let roomsData = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }))
+        if (!bookingOwnerUid) {
+          roomsData = roomsData.filter((room) => !room.ownerUid)
+        } else if (legacyUnscopedLanding) {
+          roomsData = roomsData.filter(
+            (room) =>
+              !room.ownerUid ||
+              String(room.ownerUid || "").trim() === "" ||
+              room.ownerUid === bookingOwnerUid,
+          )
+        }
+        roomsData = roomsData
           .filter((room) => {
-            // Only show rooms that are marked as "Available"
-            // If availability field doesn't exist, show the room (for backward compatibility)
-            // Filter out "Maintenance" and "Unavailable" rooms
             if (!room.availability) {
-              return true // Show room if availability field doesn't exist
+              return true
             }
             return room.availability === "Available"
           })
-          // Sort by createdAt if available, otherwise keep original order
           .sort((a, b) => {
             if (a.createdAt && b.createdAt) {
               return b.createdAt.toMillis() - a.createdAt.toMillis()
@@ -365,7 +550,7 @@ export default function Home() {
     )
 
     return () => unsubscribe()
-  }, [])
+  }, [bookingOwnerUid, legacyUnscopedLanding])
 
   // Calculate pagination
   const totalRoomPages = Math.max(1, Math.ceil(rooms.length / ROOMS_PER_PAGE))
@@ -420,7 +605,7 @@ export default function Home() {
         const response = await fetch("/api/booking/get-booked-dates", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ roomType: formData.roomType }),
+          body: JSON.stringify({ roomType: formData.roomType, ownerUid: bookingOwnerUid }),
         })
 
         const data = await response.json()
@@ -444,7 +629,7 @@ export default function Home() {
     }
 
     fetchBookedDates()
-  }, [formData.roomType])
+  }, [formData.roomType, bookingOwnerUid])
 
   // Quick validation - no async checking, just check booked dates locally
   useEffect(() => {
@@ -563,35 +748,47 @@ export default function Home() {
     e.preventDefault()
     
     if (!otpSent) {
+      if (paymentRequired) {
+        if (!paymentQrUrl) {
+          toast.error("Payment QR code is not available yet. Please contact the resort admin.")
+          return
+        }
+        if (!proofOfPaymentUrl || !validIdUrl) {
+          toast.error("Please upload proof of payment and 1 valid ID before sending OTP.")
+          return
+        }
+      }
       // Step 1: Check date availability before proceeding
       if (!dateAvailability.available) {
         toast.error(dateAvailability.message || "Selected dates are not available. Please choose different dates.")
         return
       }
 
-      // Step 2: Check reCAPTCHA before sending OTP
-      if (!recaptchaToken) {
+      const recaptchaConfigured = Boolean(process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY)
+
+      // Step 2: reCAPTCHA (only when site key is set — otherwise skip for local/dev)
+      if (recaptchaConfigured && !recaptchaToken) {
         toast.error("Please complete the reCAPTCHA verification")
         return
       }
 
-      // Step 3: Verify reCAPTCHA on server
       setBookingSubmitting(true)
       try {
-        // Verify reCAPTCHA first
-        const recaptchaResponse = await fetch("/api/booking/verify-recaptcha", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token: recaptchaToken }),
-        })
+        if (recaptchaConfigured && recaptchaToken) {
+          const recaptchaResponse = await fetch("/api/booking/verify-recaptcha", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: recaptchaToken }),
+          })
 
-        const recaptchaData = await recaptchaResponse.json()
-        
-        if (!recaptchaResponse.ok) {
-          toast.error(recaptchaData.error || "reCAPTCHA verification failed")
-          recaptchaRef.current?.reset()
-          setRecaptchaToken(null)
-          return
+          const recaptchaData = await recaptchaResponse.json()
+
+          if (!recaptchaResponse.ok) {
+            toast.error(recaptchaData.error || "reCAPTCHA verification failed")
+            recaptchaRef.current?.reset()
+            setRecaptchaToken(null)
+            return
+          }
         }
 
         // Normalize email (trim and lowercase)
@@ -599,7 +796,7 @@ export default function Home() {
         const response = await fetch("/api/booking/send-otp", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: normalizedEmail }),
+          body: JSON.stringify({ email: normalizedEmail, ownerUid: bookingOwnerUid }),
         })
         
         const data = await response.json()
@@ -618,7 +815,14 @@ export default function Home() {
               duration: 8000,
             })
           } else {
-            toast.error(data.error || "Failed to send OTP. Please try again.")
+            toast.error(data.error || "Failed to send OTP. Please try again.", {
+              ...(data.hint
+                ? {
+                    description: `${data.hint}${data.code ? ` (${data.code})` : ""}`,
+                    duration: 12000,
+                  }
+                : { duration: 6000 }),
+            })
           }
         }
       } catch (error) {
@@ -643,6 +847,8 @@ export default function Home() {
             ...formData,
             email: normalizedEmail,
             otp: normalizedOtp,
+            ownerUid: bookingOwnerUid,
+            ...(paymentRequired ? { proofOfPaymentUrl, validIdUrl } : {}),
           },
           "booking",
           24 * 60 * 60 * 1000 // 24 hours max age
@@ -663,6 +869,8 @@ export default function Home() {
             roomType: "",
             specialRequests: "",
           })
+          setProofOfPaymentUrl("")
+          setValidIdUrl("")
           setOtpSent(false)
           setOtpCode("")
     setBookingConfirmed(true)
@@ -682,6 +890,8 @@ export default function Home() {
             roomType: "",
             specialRequests: "",
             })
+          setProofOfPaymentUrl("")
+          setValidIdUrl("")
           setOtpSent(false)
           setOtpCode("")
           setBookingConfirmed(true)
@@ -700,8 +910,18 @@ export default function Home() {
   // Fetch feedbacks from Firestore
   useEffect(() => {
     const feedbacksRef = collection(db, "feedbacks")
-    // Fetch all feedbacks - we'll filter and sort in JavaScript to avoid Firestore index requirements
-    const q = query(feedbacksRef)
+    const q =
+      bookingOwnerUid && !legacyUnscopedLanding
+        ? query(feedbacksRef, where("ownerUid", "==", bookingOwnerUid))
+        : query(feedbacksRef)
+
+    const tenantOk = (fb) => {
+      if (!bookingOwnerUid) return !fb.ownerUid
+      if (legacyUnscopedLanding) {
+        return !fb.ownerUid || fb.ownerUid === bookingOwnerUid
+      }
+      return fb.ownerUid === bookingOwnerUid
+    }
 
     const unsubscribe = onSnapshot(
       q,
@@ -712,9 +932,8 @@ export default function Home() {
             ...doc.data(),
           }))
           .filter((fb) => {
-            // Filter for Published status (case-insensitive and trimmed)
             const status = (fb.status || "").trim()
-            return status === "Published"
+            return status === "Published" && tenantOk(fb)
           })
           .sort((a, b) => {
             // Sort by createdAt descending (newest first)
@@ -752,7 +971,7 @@ export default function Home() {
                 }))
                 .filter((fb) => {
                   const status = (fb.status || "").trim()
-                  return status === "Published"
+                  return status === "Published" && tenantOk(fb)
                 })
                 .sort((a, b) => {
                   if (a.createdAt && b.createdAt) {
@@ -784,7 +1003,7 @@ export default function Home() {
     return () => {
       unsubscribe()
     }
-  }, [])
+  }, [bookingOwnerUid, legacyUnscopedLanding])
 
   // Auto-scroll feedbacks every 5 seconds
   useEffect(() => {
@@ -817,6 +1036,7 @@ export default function Home() {
           email: feedback.email,
           rating: feedback.rating,
           message: feedback.message,
+          ownerUid: bookingOwnerUid,
         },
         "feedback",
         7 * 24 * 60 * 60 * 1000 // 7 days max age for feedback
@@ -852,6 +1072,7 @@ export default function Home() {
           name: contact.name,
           email: contact.email,
           message: contact.message,
+          ownerUid: bookingOwnerUid,
         },
         "contact",
         7 * 24 * 60 * 60 * 1000 // 7 days max age for contact messages
@@ -882,6 +1103,34 @@ export default function Home() {
     }, 300)
   }
 
+  const getInitials = (raw) => {
+    const name = String(raw || "").trim()
+    if (!name) return "R"
+    const parts = name.split(/\s+/).filter(Boolean)
+    const letters = parts.slice(0, 2).map((p) => p[0]?.toUpperCase()).filter(Boolean)
+    return (letters.join("") || name[0]?.toUpperCase() || "R").slice(0, 2)
+  }
+
+  const BrandLogo = ({ className, borderClassName, textClassName }) => {
+    if (branding.logo) {
+      return (
+        <img
+          src={branding.logo}
+          alt={`${branding.name} logo`}
+          className={className}
+        />
+      )
+    }
+    return (
+      <div
+        aria-label={`${branding.name} logo`}
+        className={`${className} flex items-center justify-center ${borderClassName || ""} ${textClassName || ""}`}
+      >
+        <LayoutDashboard className="h-5 w-5" strokeWidth={2.2} />
+      </div>
+    )
+  }
+
   return (
     <div className={`min-h-screen transition-colors ${
       theme === "dark"
@@ -893,7 +1142,7 @@ export default function Home() {
           scroll-behavior: smooth;
         }
       `}</style>
-      <DynamicHead />
+      <DynamicHead brandingOverride={bookingOwnerUid ? branding : null} />
       {/* Navigation */}
       <nav className={`fixed w-full top-0 z-50 shadow-md transition-colors ${
         theme === "dark" ? "bg-slate-800" : "bg-white"
@@ -901,12 +1150,11 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center gap-3">
-              <img
-                src={branding.logo || "/placeholder-logo.png"}
-                alt={`${branding.name} logo`}
+              <BrandLogo
                 className={`h-10 w-10 rounded-full object-cover border ${
-                  theme === "dark" ? "border-slate-600" : "border-emerald-100"
+                  theme === "dark" ? "border-slate-600 bg-slate-700" : "border-emerald-100 bg-emerald-50"
                 }`}
+                textClassName={theme === "dark" ? "text-emerald-200" : "text-emerald-700"}
               />
               <div className={`text-xl sm:text-2xl font-bold tracking-[0.2em] uppercase hidden sm:block ${
                 theme === "dark" ? "text-white" : "text-emerald-700"
@@ -914,13 +1162,13 @@ export default function Home() {
                 {branding.name}
               </div>
             </div>
-            <div className="hidden md:flex items-center space-x-8">
-              {["Home", "Rooms", "Booking", "About", "Contact"].map((item) => (
+            <div className="hidden md:flex md:items-center md:gap-x-5 lg:gap-x-7">
+              {navLinks.map((item) => (
                 <a
                   key={item}
                   href={`#${item.toLowerCase()}`}
                   onClick={(e) => handleSmoothScroll(e, item.toLowerCase())}
-                  className={`transition cursor-pointer ${
+                  className={`text-sm font-medium tracking-wide transition lg:text-[15px] ${
                     theme === "dark"
                       ? "text-gray-300 hover:text-white"
                       : "text-gray-700 hover:text-emerald-700"
@@ -974,7 +1222,7 @@ export default function Home() {
             }`}
           >
             <div className="flex flex-col space-y-3 pt-2">
-              {["Home", "Rooms", "Booking", "About", "Contact"].map((item, index) => (
+              {navLinks.map((item, index) => (
                 <a
                   key={item}
                   href={`#${item.toLowerCase()}`}
@@ -1006,32 +1254,70 @@ export default function Home() {
       {/* Hero Section */}
       <section
         id="home"
-        className={`pt-24 pb-16 px-4 sm:px-6 lg:px-8 text-white mt-16 ${
-          theme === "dark"
-            ? "bg-gradient-to-r from-slate-800 to-slate-700"
-            : "bg-gradient-to-r from-emerald-700 to-emerald-600"
-        }`}
+        className="relative mt-16 overflow-hidden px-4 pb-24 pt-28 text-white sm:px-6 sm:pb-28 md:pb-32 lg:px-8"
+        style={
+          branding.heroImageUrl
+            ? {
+                backgroundImage: `url(${branding.heroImageUrl})`,
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+              }
+            : undefined
+        }
       >
-        <div className="max-w-7xl mx-auto text-center">
-          <h1 className="text-4xl md:text-5xl font-bold mb-4">Welcome to {branding.name}</h1>
-          <p className="text-lg md:text-xl mb-8 opacity-90">{branding.tagline}</p>
-          <button
-            onClick={(e) => handleSmoothScroll(e, "booking")}
-            className="bg-amber-500 hover:bg-amber-600 px-8 py-3 rounded-lg font-semibold transition cursor-pointer"
-          >
-            Book Now
-          </button>
+        {!branding.heroImageUrl && (
+          <div
+            className={`absolute inset-0 ${
+              theme === "dark"
+                ? "bg-gradient-to-r from-slate-800 to-slate-700"
+                : "bg-gradient-to-r from-emerald-700 to-emerald-600"
+            }`}
+          />
+        )}
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundColor: "rgba(0,0,0,1)",
+            opacity: Math.min(0.9, Math.max(0, (Number(branding.heroOverlayOpacity || 0) || 0) / 100)),
+          }}
+        />
+        <div className="mx-auto max-w-4xl px-2 text-center">
+          <div className="relative">
+            <h1 className="mb-5 text-4xl font-bold leading-tight md:text-5xl md:leading-tight">
+              Welcome to {branding.name}
+            </h1>
+            <p className="mx-auto mb-10 max-w-2xl text-lg opacity-90 md:text-xl md:leading-relaxed">
+              {branding.tagline}
+            </p>
+            <button
+              onClick={(e) => handleSmoothScroll(e, "booking")}
+              className="cursor-pointer rounded-xl bg-amber-500 px-10 py-3.5 font-semibold shadow-lg shadow-black/20 transition hover:bg-amber-600"
+            >
+              Book Now
+            </button>
+          </div>
         </div>
       </section>
 
       {/* Rooms Section */}
-      <section id="rooms" className="py-16 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
-          <h2 className={`text-3xl md:text-4xl font-bold text-center mb-12 ${
-            theme === "dark" ? "text-white" : "text-emerald-700"
-          }`}>Our Rooms</h2>
+      <section id="rooms" className="px-4 py-20 sm:px-6 md:py-24 lg:px-8">
+        <div className="mx-auto max-w-7xl">
+          <h2
+            className={`mb-4 text-center text-3xl font-bold tracking-tight md:mb-6 md:text-4xl ${
+              theme === "dark" ? "text-white" : "text-emerald-700"
+            }`}
+          >
+            Our Rooms
+          </h2>
+          <p
+            className={`mx-auto mb-14 max-w-2xl text-center text-sm leading-relaxed md:mb-16 md:text-base ${
+              theme === "dark" ? "text-slate-400" : "text-gray-600"
+            }`}
+          >
+            Choose an accommodation that fits your stay. Tap a room for photos and details.
+          </p>
           {loadingRooms ? (
-            <div className="grid md:grid-cols-3 gap-8">
+            <div className="grid gap-10 md:grid-cols-2 md:gap-10 lg:grid-cols-3 lg:gap-12">
               {[1, 2, 3, 4, 5, 6].map((idx) => (
                 <div key={idx} className={`group rounded-2xl shadow-lg overflow-hidden border animate-pulse ${
                   theme === "dark"
@@ -1086,7 +1372,7 @@ export default function Home() {
             </div>
           ) : (
             <>
-          <div className="grid md:grid-cols-3 gap-8">
+          <div className="grid gap-10 md:grid-cols-2 md:gap-10 lg:grid-cols-3 lg:gap-12">
                 {paginatedRooms.map((room) => (
                   <RoomCard
                 key={room.id}
@@ -1098,7 +1384,7 @@ export default function Home() {
                 ))}
               </div>
               {totalRoomPages > 1 && (
-                <div className={`mt-8 flex flex-col items-center gap-4 text-sm md:flex-row md:justify-between ${
+                <div className={`mt-12 flex flex-col items-center gap-4 text-sm md:flex-row md:justify-between ${
                   theme === "dark" ? "text-gray-300" : "text-gray-600"
                 }`}>
                   <button
@@ -1443,24 +1729,43 @@ export default function Home() {
       )}
 
       {/* Booking Section */}
-      <section id="booking" className={`py-16 px-4 sm:px-6 lg:px-8 ${
-        theme === "dark" ? "bg-slate-800" : "bg-gray-50"
-      }`}>
-        <div className="max-w-3xl mx-auto">
-          <h2 className={`text-3xl md:text-4xl font-bold text-center mb-12 ${
-            theme === "dark" ? "text-white" : "text-emerald-700"
-          }`}>Book Your Stay</h2>
-          <form onSubmit={handleBooking} className={`p-8 rounded-lg shadow-lg ${
-            theme === "dark" ? "bg-slate-700" : "bg-white"
-          }`}>
+      <section
+        id="booking"
+        className={`px-4 py-20 sm:px-6 md:py-24 lg:px-8 ${
+          theme === "dark" ? "bg-slate-800" : "bg-gray-50"
+        }`}
+      >
+        <div className="mx-auto max-w-4xl">
+          <h2
+            className={`mb-3 text-center text-3xl font-bold tracking-tight md:text-4xl ${
+              theme === "dark" ? "text-white" : "text-emerald-700"
+            }`}
+          >
+            Book Your Stay
+          </h2>
+          <p
+            className={`mx-auto mb-12 max-w-xl text-center text-sm md:mb-14 md:text-base ${
+              theme === "dark" ? "text-slate-400" : "text-gray-600"
+            }`}
+          >
+            Two quick steps: your details, then email verification.
+          </p>
+          <form
+            onSubmit={handleBooking}
+            className={`rounded-2xl p-6 shadow-xl sm:p-8 md:p-10 ${
+              theme === "dark" ? "bg-slate-700/90 ring-1 ring-slate-600/60" : "bg-white ring-1 ring-gray-200/80"
+            }`}
+          >
             {!otpSent ? (
               <>
                 {/* Step 1: Booking Form */}
-                <div className="mb-6">
-                  <p className="text-sm text-gray-600 mb-4">Step 1 of 2: Fill in your booking details</p>
+                <div className="mb-8 border-b border-gray-200/80 pb-8 dark:border-slate-600/80">
+                  <p className="text-sm font-medium text-gray-600 dark:text-slate-300">
+                    Step 1 of 2 — Guest details
+                  </p>
                 </div>
                 
-            <div className="grid md:grid-cols-2 gap-6 mb-6">
+            <div className="mb-8 grid gap-6 md:grid-cols-2 md:gap-8">
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">Full Name *</label>
               <input
@@ -1485,7 +1790,7 @@ export default function Home() {
             </div>
                 </div>
                 
-                <div className="mb-6">
+                <div className="mb-8">
                   <label className="block text-sm font-semibold text-gray-700 mb-2">Phone Number *</label>
               <input
                     type="tel"
@@ -1497,7 +1802,7 @@ export default function Home() {
               />
                 </div>
                 
-            <div className="grid md:grid-cols-2 gap-6 mb-6">
+            <div className="mb-8 grid gap-6 md:grid-cols-2 md:gap-8">
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">
                       Check-in Date *
@@ -1702,8 +2007,10 @@ export default function Home() {
                 
                 {/* Show booked date ranges */}
                 {formData.roomType && bookedRanges.length > 0 && (
-                  <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
-                    <p className="text-xs font-semibold text-amber-800 mb-2">📅 Already Booked Dates for {formData.roomType}:</p>
+                  <div className="mb-8 rounded-xl border border-amber-200 bg-amber-50 p-4 md:p-5">
+                    <p className="mb-3 text-xs font-semibold text-amber-800">
+                      Already booked — {formData.roomType}
+                    </p>
                     <div className="flex flex-wrap gap-2">
                       {bookedRanges.map((range, idx) => (
                         <span
@@ -1720,7 +2027,7 @@ export default function Home() {
                 
                 {/* Date Availability Status */}
                 {formData.roomType && formData.checkIn && formData.checkOut && (
-                  <div className="mb-6">
+                  <div className="mb-8">
                     {dateAvailability.checking ? (
                       <div className="flex items-center gap-2 text-sm text-gray-600">
                         <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-200 border-t-emerald-600"></div>
@@ -1738,7 +2045,7 @@ export default function Home() {
                   </div>
                 )}
                 
-            <div className="grid md:grid-cols-2 gap-6 mb-6">
+            <div className="mb-8 grid gap-6 md:grid-cols-2 md:gap-8">
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">Number of Guests *</label>
               <input
@@ -1771,7 +2078,7 @@ export default function Home() {
             </div>
                 </div>
                 
-                <div className="mb-6">
+                <div className="mb-8">
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
                     Special Requests / Notes <span className="text-gray-500 font-normal">(Optional)</span>
                   </label>
@@ -1783,10 +2090,213 @@ export default function Home() {
                     className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-700"
                   />
                 </div>
+
+                {/* Price summary */}
+                {formData.roomType && basePrice > 0 && formData.checkIn && formData.checkOut && nights > 0 && (
+                  <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4">
+                    <p className="text-sm font-semibold text-slate-900">Price summary</p>
+                    <div className="mt-3 grid gap-2 text-sm text-slate-700">
+                      <div className="flex items-center justify-between">
+                        <span>Price per night</span>
+                        <span className="font-semibold">{formatPhp(pricePerNight)}</span>
+                      </div>
+                      {discount > 0 && (
+                        <div className="flex items-center justify-between text-xs text-emerald-700">
+                          <span>Discount</span>
+                          <span className="font-semibold">{discount}% off</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between">
+                        <span>Nights</span>
+                        <span className="font-semibold">{nights}</span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between border-t border-slate-200 pt-2">
+                        <span className="font-semibold text-slate-900">Estimated total</span>
+                        <span className="font-bold text-emerald-700">{formatPhp(estimatedTotal)}</span>
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        Final amount may change after admin review (discounts, adjustments, or room changes).
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Payment (GCash QR) + uploads */}
+                {paymentRequired && (
+                <div className="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                  <p className="text-sm font-semibold text-emerald-900">Step 2 of 3: Payment</p>
+                  {paymentQrUrl ? (
+                    <div className="mt-3 grid gap-5 md:grid-cols-[minmax(0,20rem)_1fr] md:items-start">
+                      <div className="mx-auto w-full max-w-[20rem] md:mx-0">
+                        <div className="group relative">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewImage(paymentQrUrl)}
+                            className="relative block w-full overflow-hidden rounded-xl border-2 border-emerald-200 bg-white p-2 shadow-sm transition hover:ring-2 hover:ring-emerald-400/50 focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                            aria-label="View GCash QR full screen"
+                          >
+                            <img
+                              src={paymentQrUrl}
+                              alt="GCash QR code"
+                              className="mx-auto h-60 w-60 object-contain md:h-80 md:w-80"
+                            />
+                          </button>
+                          <div className="pointer-events-none absolute top-3 right-3 opacity-0 transition-opacity group-hover:opacity-100">
+                            <div className="rounded-full bg-white/95 p-2 shadow-md">
+                              <ZoomIn size={18} className="text-emerald-700" aria-hidden />
+                            </div>
+                          </div>
+                        </div>
+                        <p className="mt-2 text-center text-xs text-emerald-800/80">Tap to preview full size</p>
+                      </div>
+                      <div className="text-sm text-emerald-900/90">
+                        <p className="font-semibold">Scan to pay via GCash.</p>
+                        <p className="mt-1 text-xs text-emerald-900/70">
+                          After payment, upload your proof of payment and 1 valid ID below, then proceed to OTP.
+                        </p>
+                        {paymentInstructions ? (
+                          <p className="mt-2 text-xs text-emerald-900/80">{paymentInstructions}</p>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm text-emerald-900/80">
+                      Payment QR is not available yet for this resort. Please contact the admin.
+                    </p>
+                  )}
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">Proof of Payment *</label>
+                      <label
+                        className={`flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-white px-4 py-3 text-sm transition ${
+                          uploadingProof ? "opacity-60 cursor-not-allowed" : "hover:bg-emerald-50"
+                        }`}
+                      >
+                        <span className="flex items-center gap-2 text-emerald-900">
+                          <Upload className="h-4 w-4" />
+                          <span className="font-semibold">{proofOfPaymentUrl ? "Replace proof" : "Upload proof"}</span>
+                        </span>
+                        <span className="text-xs text-gray-500">{proofOfPaymentUrl ? "Uploaded" : "PNG/JPG"}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={uploadingProof}
+                          onChange={async (e) => {
+                            const f = e.target.files?.[0]
+                            if (!f) return
+                            setUploadingProof(true)
+                            try {
+                              const url = await uploadGuestFile(f)
+                              setProofOfPaymentUrl(url)
+                              toast.success("Proof of payment uploaded.")
+                            } catch (err) {
+                              console.error(err)
+                              toast.error(err?.message || "Failed to upload proof of payment.")
+                            } finally {
+                              setUploadingProof(false)
+                              e.target.value = ""
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                      {proofOfPaymentUrl ? (
+                        <div className="mt-3 space-y-2">
+                          <div className="group relative overflow-hidden rounded-lg border border-emerald-200 bg-white shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() => setPreviewImage(proofOfPaymentUrl)}
+                              className="block h-44 w-full focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:ring-offset-2"
+                              aria-label="View proof of payment full screen"
+                            >
+                              <img
+                                src={proofOfPaymentUrl}
+                                alt="Proof of payment"
+                                className="h-44 w-full cursor-pointer object-cover transition hover:opacity-95"
+                              />
+                            </button>
+                            <div className="pointer-events-none absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
+                              <div className="rounded-full bg-white/95 p-2 shadow-md">
+                                <ZoomIn size={18} className="text-emerald-700" aria-hidden />
+                              </div>
+                            </div>
+                          </div>
+                          <p className="text-xs text-emerald-800/90">Tap image to preview full size</p>
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-xs text-gray-500">Upload a screenshot/photo of your payment.</p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">1 Valid ID *</label>
+                      <label
+                        className={`flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-white px-4 py-3 text-sm transition ${
+                          uploadingId ? "opacity-60 cursor-not-allowed" : "hover:bg-emerald-50"
+                        }`}
+                      >
+                        <span className="flex items-center gap-2 text-emerald-900">
+                          <Upload className="h-4 w-4" />
+                          <span className="font-semibold">{validIdUrl ? "Replace ID" : "Upload valid ID"}</span>
+                        </span>
+                        <span className="text-xs text-gray-500">{validIdUrl ? "Uploaded" : "PNG/JPG"}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={uploadingId}
+                          onChange={async (e) => {
+                            const f = e.target.files?.[0]
+                            if (!f) return
+                            setUploadingId(true)
+                            try {
+                              const url = await uploadGuestFile(f)
+                              setValidIdUrl(url)
+                              toast.success("Valid ID uploaded.")
+                            } catch (err) {
+                              console.error(err)
+                              toast.error(err?.message || "Failed to upload valid ID.")
+                            } finally {
+                              setUploadingId(false)
+                              e.target.value = ""
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                      {validIdUrl ? (
+                        <div className="mt-3 space-y-2">
+                          <div className="group relative overflow-hidden rounded-lg border border-emerald-200 bg-white shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() => setPreviewImage(validIdUrl)}
+                              className="block h-44 w-full focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:ring-offset-2"
+                              aria-label="View valid ID full screen"
+                            >
+                              <img
+                                src={validIdUrl}
+                                alt="Valid ID"
+                                className="h-44 w-full cursor-pointer object-cover transition hover:opacity-95"
+                              />
+                            </button>
+                            <div className="pointer-events-none absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
+                              <div className="rounded-full bg-white/95 p-2 shadow-md">
+                                <ZoomIn size={18} className="text-emerald-700" aria-hidden />
+                              </div>
+                            </div>
+                          </div>
+                          <p className="text-xs text-emerald-800/90">Tap image to preview full size</p>
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-xs text-gray-500">Upload 1 government ID (photo).</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                )}
                 
                 {/* reCAPTCHA */}
                 {process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY && (
-                  <div className="mb-6 flex justify-center">
+                  <div className="mb-8 flex justify-center">
                     <ReCAPTCHA
                       ref={recaptchaRef}
                       sitekey={process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY}
@@ -1805,24 +2315,37 @@ export default function Home() {
                 
             <button
               type="submit"
-                  disabled={bookingSubmitting || !recaptchaToken || (formData.roomType && formData.checkIn && formData.checkOut && !dateAvailability.available)}
-                  className="w-full bg-emerald-700 text-white py-3 rounded-lg hover:bg-emerald-800 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={
+                    bookingSubmitting ||
+                    (Boolean(process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY) && !recaptchaToken) ||
+                    (paymentRequired && (!paymentQrUrl || !proofOfPaymentUrl || !validIdUrl)) ||
+                    (formData.roomType && formData.checkIn && formData.checkOut && !dateAvailability.available)
+                  }
+                  className="mt-2 w-full rounded-xl bg-emerald-700 py-3.5 font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
                   {bookingSubmitting ? "Sending OTP..." : "Send OTP Verification"}
             </button>
+
+            {paymentRequired && (
+              <div className="mt-5 space-y-1.5 text-xs text-gray-500">
+                {!paymentQrUrl && <p>• Waiting for admin to upload a GCash QR code.</p>}
+                {!proofOfPaymentUrl && <p>• Upload your proof of payment.</p>}
+                {!validIdUrl && <p>• Upload 1 valid ID.</p>}
+              </div>
+            )}
               </>
             ) : (
               <>
                 {/* Step 2: OTP Verification */}
-                <div className="mb-6">
-                  <p className="text-sm text-gray-600 mb-2">Step 2 of 2: Verify your email</p>
-                  <p className="text-xs text-gray-500">
-                    We've sent a 6-digit OTP code to <strong>{formData.email}</strong>
+                <div className="mb-8 border-b border-gray-200/80 pb-8 dark:border-slate-600/80">
+                  <p className="text-sm font-medium text-gray-600 dark:text-slate-300">Step 2 of 2 — Email verification</p>
+                  <p className="mt-2 text-sm text-gray-500 dark:text-slate-400">
+                    We sent a 6-digit code to <strong className="text-gray-800 dark:text-slate-200">{formData.email}</strong>
                   </p>
                 </div>
                 
-                <div className="mb-6">
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Enter OTP Code *</label>
+                <div className="mb-2">
+                  <label className="mb-2 block text-sm font-semibold text-gray-700">Enter OTP code *</label>
                   <input
                     type="text"
                     maxLength={6}
@@ -1865,26 +2388,33 @@ export default function Home() {
       </section>
 
       {/* About Section */}
-      <section id="about" className={`py-16 px-4 sm:px-6 lg:px-8 ${
-        theme === "dark" ? "bg-slate-900" : ""
-      }`}>
-        <div className="max-w-7xl mx-auto">
-          <h2 className={`text-3xl md:text-4xl font-bold text-center mb-12 ${
-            theme === "dark" ? "text-white" : "text-emerald-700"
-          }`}>About {branding.name}</h2>
-          <div className="grid md:grid-cols-3 gap-8">
-            {[
-              {
-                title: "Premium Comfort",
-                desc: "Experience ultimate luxury in every room with world-class amenities.",
-              },
-              { title: "Expert Service", desc: "Our dedicated staff ensures your stay is memorable and hassle-free." },
-              {
-                title: "Best Location",
-                desc: "Centrally located with easy access to major attractions and restaurants.",
-              },
-            ].map((item, idx) => (
-              <div key={idx} className={`p-8 rounded-lg text-center ${
+      <section
+        id="about"
+        className={`px-4 py-20 sm:px-6 md:py-24 lg:px-8 ${theme === "dark" ? "bg-slate-900" : ""}`}
+      >
+        <div className="mx-auto max-w-7xl">
+          <h2
+            className={`mb-4 text-center text-3xl font-bold tracking-tight md:mb-6 md:text-4xl ${
+              theme === "dark" ? "text-white" : "text-emerald-700"
+            }`}
+          >
+            About {branding.name}
+          </h2>
+          {String(branding.aboutBody || "").trim() ? (
+            <p
+              className={`mx-auto mb-12 max-w-2xl text-center text-base leading-relaxed md:mb-16 md:text-lg ${
+                theme === "dark" ? "text-gray-300" : "text-gray-700"
+              }`}
+            >
+              {branding.aboutBody}
+            </p>
+          ) : null}
+          <div className="grid gap-10 md:grid-cols-3 md:gap-8 lg:gap-10">
+            {(Array.isArray(branding.aboutHighlights) && branding.aboutHighlights.length
+              ? branding.aboutHighlights
+              : BRANDING_DEFAULTS.aboutHighlights
+            ).slice(0, 3).map((item, idx) => (
+              <div key={idx} className={`rounded-2xl p-7 text-center md:p-8 ${
                 theme === "dark"
                   ? "bg-gradient-to-br from-slate-800 to-slate-700"
                   : "bg-gradient-to-br from-emerald-50 to-emerald-100"
@@ -1899,29 +2429,141 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Contact Section */}
-      <section id="contact" className={`py-16 px-4 sm:px-6 lg:px-8 ${
-        theme === "dark" ? "bg-slate-800" : "bg-gray-50"
-      }`}>
-        <div className="max-w-7xl mx-auto">
-          <h2 className={`text-3xl md:text-4xl font-bold text-center mb-12 ${
-            theme === "dark" ? "text-white" : "text-emerald-700"
-          }`}>Contact Us</h2>
-          <div className="grid md:grid-cols-2 gap-8">
-            <div>
-              <div className="flex items-center mb-6">
-                <MapPin className={`mr-4 ${
+      {/* Contact & location (single section — marketplace map when available) */}
+      <section
+        id="contact"
+        className={`px-4 py-20 sm:px-6 md:py-24 lg:px-8 ${
+          theme === "dark" ? "bg-slate-800" : "bg-gray-50"
+        }`}
+      >
+        <div className="mx-auto max-w-6xl">
+          <h2
+            className={`mb-3 text-center text-3xl font-bold tracking-tight md:text-4xl ${
+              theme === "dark" ? "text-white" : "text-emerald-700"
+            }`}
+          >
+            Contact &amp; location
+          </h2>
+          <p
+            className={`mx-auto mb-12 max-w-xl text-center text-sm md:mb-14 md:text-base ${
+              theme === "dark" ? "text-slate-400" : "text-gray-600"
+            }`}
+          >
+            {hasResortListingHint
+              ? "Find us on the map when available, then use the details or form to get in touch."
+              : "Reach the property directly or send a message below."}
+          </p>
+
+          {hasResortListingHint && (
+            <div className="mb-12 md:mb-16">
+              {(resortMarketplace.location || branding.address) && (
+                <p
+                  className={`mx-auto mb-6 max-w-2xl text-center text-base leading-relaxed md:mb-8 md:text-lg ${
+                    theme === "dark" ? "text-gray-300" : "text-gray-700"
+                  }`}
+                >
+                  {resortMarketplace.location || branding.address}
+                </p>
+              )}
+              {showMapEmbedCard && (
+                <>
+                  <div
+                    className={`mx-auto max-w-5xl overflow-hidden rounded-2xl border shadow-lg ${
+                      theme === "dark" ? "border-slate-600 bg-slate-900" : "border-gray-200 bg-white"
+                    }`}
+                  >
+                    {mapIframe?.src ? (
+                      <iframe
+                        title={`Map — ${branding.name}`}
+                        src={mapIframe.src}
+                        className="h-[min(380px,50vh)] w-full border-0 sm:h-[min(440px,55vh)]"
+                        loading="lazy"
+                        referrerPolicy="no-referrer-when-downgrade"
+                        allowFullScreen
+                      />
+                    ) : resortMarketplace.mapsUrl ? (
+                      <div
+                        className={`flex flex-col items-center justify-center gap-5 px-6 py-16 text-center ${
+                          theme === "dark" ? "text-gray-300" : "text-gray-600"
+                        }`}
+                      >
+                        <MapPin className={theme === "dark" ? "text-emerald-400" : "text-emerald-700"} size={40} />
+                        <p className="max-w-md text-sm leading-relaxed">
+                          Live preview isn&apos;t embedded here. Use{" "}
+                          <strong className="text-gray-800 dark:text-slate-200">Get directions</strong> below for
+                          Google Maps navigation, or open your saved map link.
+                        </p>
+                        <a
+                          href={resortMarketplace.mapsUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`inline-flex items-center justify-center rounded-xl px-5 py-3 text-sm font-semibold transition ${
+                            theme === "dark"
+                              ? "text-emerald-300 ring-1 ring-emerald-600/80 hover:bg-slate-800"
+                              : "text-emerald-800 ring-1 ring-emerald-200 hover:bg-emerald-50"
+                          }`}
+                        >
+                          Open original Maps link
+                        </a>
+                      </div>
+                    ) : null}
+                  </div>
+                  {mapIframe?.provider === "osm" && (
+                    <p className={`mt-3 text-center text-xs ${theme === "dark" ? "text-gray-500" : "text-gray-500"}`}>
+                      Preview © OpenStreetMap (approximate). Use the green button below for Google driving directions.
+                    </p>
+                  )}
+                </>
+              )}
+              {googleDirectionsUrl && (
+                <div className="mt-8 flex justify-center md:mt-10">
+                  <a
+                    href={googleDirectionsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-700 px-7 py-3.5 text-base font-semibold text-white shadow-md transition hover:bg-emerald-800"
+                  >
+                    <Navigation className="h-5 w-5 shrink-0" aria-hidden />
+                    Get directions in Google Maps
+                  </a>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!hasResortListingHint && bookingOwnerUid && googleDirectionsUrl && (
+            <div className="mb-12 flex justify-center md:mb-14">
+              <a
+                href={googleDirectionsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-700 px-7 py-3.5 text-base font-semibold text-white shadow-md transition hover:bg-emerald-800"
+              >
+                <Navigation className="h-5 w-5 shrink-0" aria-hidden />
+                Get directions in Google Maps
+              </a>
+            </div>
+          )}
+
+          <div className="grid gap-12 md:grid-cols-2 md:gap-14 lg:gap-16">
+            <div className={`rounded-2xl p-6 md:p-8 ${theme === "dark" ? "bg-slate-900/50 ring-1 ring-slate-600/50" : "bg-white ring-1 ring-gray-200/90 shadow-sm"}`}>
+              <div className="mb-8 flex items-start gap-4">
+                <MapPin className={`mt-0.5 shrink-0 ${
                   theme === "dark" ? "text-emerald-400" : "text-emerald-700"
                 }`} size={24} />
                 <div>
                   <h3 className={`font-bold ${
                     theme === "dark" ? "text-white" : "text-gray-800"
                   }`}>Address</h3>
-                  <p className={theme === "dark" ? "text-gray-400" : "text-gray-600"}>{branding.address || "123 Luxury Avenue, City Center"}</p>
+                  <p className={theme === "dark" ? "text-gray-400" : "text-gray-600"}>
+                    {resortMarketplace.location ||
+                      branding.address ||
+                      "123 Luxury Avenue, City Center"}
+                  </p>
                 </div>
               </div>
-              <div className="flex items-center mb-6">
-                <Phone className={`mr-4 ${
+              <div className="mb-8 flex items-start gap-4">
+                <Phone className={`mt-0.5 shrink-0 ${
                   theme === "dark" ? "text-emerald-400" : "text-emerald-700"
                 }`} size={24} />
                 <div>
@@ -1937,8 +2579,8 @@ export default function Home() {
                   </a>
                 </div>
               </div>
-              <div className="flex items-center">
-                <Mail className={`mr-4 ${
+              <div className="flex items-start gap-4">
+                <Mail className={`mt-0.5 shrink-0 ${
                   theme === "dark" ? "text-emerald-400" : "text-emerald-700"
                 }`} size={24} />
                 <div>
@@ -1955,7 +2597,14 @@ export default function Home() {
                 </div>
               </div>
             </div>
-            <form onSubmit={handleContact} className="space-y-4">
+            <form
+              onSubmit={handleContact}
+              className={`space-y-5 rounded-2xl p-6 md:p-8 ${
+                theme === "dark"
+                  ? "bg-slate-900/40 ring-1 ring-slate-600/40"
+                  : "bg-white ring-1 ring-gray-200/90 shadow-sm"
+              }`}
+            >
               <input
                 type="text"
                 placeholder="Your Name"
@@ -1995,7 +2644,7 @@ export default function Home() {
               <button
                 type="submit"
                 disabled={contactSubmitting}
-                className="w-full bg-emerald-700 text-white py-3 rounded-lg hover:bg-emerald-800 transition font-semibold flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 py-3.5 font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
               >
                 {contactSubmitting ? (
                   <>
@@ -2013,13 +2662,24 @@ export default function Home() {
       </section>
 
       {/* Feedback Section */}
-      <section className={`py-16 px-4 sm:px-6 lg:px-8 ${
-        theme === "dark" ? "bg-slate-900" : ""
-      }`}>
-        <div className="max-w-7xl mx-auto">
-          <h2 className={`text-3xl md:text-4xl font-bold text-center mb-12 ${
-            theme === "dark" ? "text-white" : "text-emerald-700"
-          }`}>Guest Feedback</h2>
+      <section
+        className={`px-4 py-20 sm:px-6 md:py-24 lg:px-8 ${theme === "dark" ? "bg-slate-900" : ""}`}
+      >
+        <div className="mx-auto max-w-7xl">
+          <h2
+            className={`mb-3 text-center text-3xl font-bold tracking-tight md:text-4xl ${
+              theme === "dark" ? "text-white" : "text-emerald-700"
+            }`}
+          >
+            Guest Feedback
+          </h2>
+          <p
+            className={`mx-auto mb-12 max-w-xl text-center text-sm md:mb-14 md:text-base ${
+              theme === "dark" ? "text-slate-400" : "text-gray-600"
+            }`}
+          >
+            What visitors say about their stay.
+          </p>
           {feedbacks.length === 0 ? (
             <div className="text-center py-12 mb-12">
               <p className={`text-lg ${
@@ -2082,15 +2742,21 @@ export default function Home() {
               )}
             </div>
           )}
-          <div className={`p-8 rounded-lg max-w-2xl mx-auto ${
-            theme === "dark"
-              ? "bg-gradient-to-r from-slate-800 to-slate-700"
-              : "bg-gradient-to-r from-emerald-50 to-emerald-100"
-          }`}>
-            <h3 className={`text-2xl font-bold mb-6 text-center ${
-              theme === "dark" ? "text-white" : "text-emerald-700"
-            }`}>Share Your Feedback</h3>
-            <form onSubmit={handleFeedback} className="space-y-4">
+          <div
+            className={`mx-auto mt-4 max-w-2xl rounded-2xl p-8 md:p-10 ${
+              theme === "dark"
+                ? "bg-gradient-to-r from-slate-800 to-slate-700 ring-1 ring-slate-600/40"
+                : "bg-gradient-to-r from-emerald-50 to-emerald-100 ring-1 ring-emerald-100/80"
+            }`}
+          >
+            <h3
+              className={`mb-8 text-center text-xl font-bold md:text-2xl ${
+                theme === "dark" ? "text-white" : "text-emerald-700"
+              }`}
+            >
+              Share your feedback
+            </h3>
+            <form onSubmit={handleFeedback} className="space-y-5">
               <input
                 type="text"
                 placeholder="Your Name"
@@ -2155,10 +2821,9 @@ export default function Home() {
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div>
               <div className="flex items-center gap-3 mb-4">
-                <img
-                  src={branding.logo || "/placeholder-logo.png"}
-                  alt={`${branding.name} logo`}
-                  className="h-10 w-10 rounded-full object-cover border border-emerald-600"
+                <BrandLogo
+                  className="h-10 w-10 rounded-full object-cover border border-emerald-600 bg-emerald-700"
+                  textClassName="text-emerald-100"
                 />
                 <h4 className="font-bold text-lg">{branding.name}</h4>
               </div>

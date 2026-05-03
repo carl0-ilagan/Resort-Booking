@@ -2,6 +2,18 @@ import { NextResponse } from "next/server"
 import crypto from "crypto"
 import { db } from "@/lib/firebase"
 import { collection, query, where, getDocs, getDoc, updateDoc, doc, serverTimestamp } from "firebase/firestore"
+import { normalizeOwnerUid } from "@/lib/booking-tenant"
+import { resolvePaymentForBooking } from "@/lib/resort-payment-server"
+
+function extractPaymentLinkIdFromEvent(event) {
+  const paymentData = event?.data
+  if (!paymentData) return null
+  const paymentAttributes = paymentData.attributes || {}
+  if (paymentData.relationships?.source?.data?.id) return paymentData.relationships.source.data.id
+  if (paymentAttributes.source?.id) return paymentAttributes.source.id
+  if (paymentAttributes.data?.id) return paymentAttributes.data.id
+  return null
+}
 
 // Verify PayMongo webhook signature
 function verifySignature(payload, signature, secret) {
@@ -27,21 +39,39 @@ export async function POST(request) {
       return NextResponse.json({ error: "Missing signature" }, { status: 401 })
     }
 
-    // Get webhook secret from environment
-    const webhookSecret = process.env.PAYMONGO_WEBHOOK_SECRET
+    let event
+    try {
+      event = JSON.parse(rawBody)
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON" }, { status: 400 })
+    }
+
+    const paymentLinkIdEarly = extractPaymentLinkIdFromEvent(event)
+    let ownerUidForWebhook = null
+    if (paymentLinkIdEarly) {
+      try {
+        const bookingsRef = collection(db, "guestbooking")
+        const q = query(bookingsRef, where("paymentLinkId", "==", paymentLinkIdEarly))
+        const snap = await getDocs(q)
+        if (!snap.empty) {
+          ownerUidForWebhook = normalizeOwnerUid(snap.docs[0].data()?.ownerUid)
+        }
+      } catch (e) {
+        console.error("Owner lookup for webhook:", e)
+      }
+    }
+
+    const payCtx = await resolvePaymentForBooking(ownerUidForWebhook)
+    const webhookSecret = payCtx.paymongoWebhookSecret
     if (!webhookSecret) {
-      console.error("PayMongo webhook secret not configured")
+      console.error("PayMongo webhook secret not configured (env or resort secrets)")
       return NextResponse.json({ error: "Webhook secret not configured" }, { status: 500 })
     }
 
-    // Verify signature
     if (!verifySignature(rawBody, signature, webhookSecret)) {
       console.error("Invalid PayMongo signature")
       return NextResponse.json({ error: "Invalid signature" }, { status: 401 })
     }
-
-    // Parse webhook payload
-    const event = JSON.parse(rawBody)
 
     console.log("PayMongo webhook received:", event.type)
 
@@ -92,7 +122,8 @@ export async function POST(request) {
       // If not found, try to fetch payment link from PayMongo to get remarks
       if (!bookingId && paymentLinkId) {
         try {
-          const paymongoSecretKey = process.env.PAYMONGO_SECRET_KEY
+          const paymongoCtx = await resolvePaymentForBooking(ownerUidForWebhook)
+          const paymongoSecretKey = paymongoCtx.paymongoSecretKey
           if (paymongoSecretKey) {
             const authString = Buffer.from(paymongoSecretKey + ":").toString("base64")
             const linkResponse = await fetch(`https://api.paymongo.com/v1/links/${paymentLinkId}`, {
